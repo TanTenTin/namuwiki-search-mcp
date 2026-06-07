@@ -8,7 +8,13 @@
 # 외부 노출(TLS)은 기존 tan-kim Caddy를 재사용한다. (이 compose엔 Caddy 없음)
 # 포트는 모두 .env에서 주입한다 (기존 서버의 사용 중 포트와 충돌 방지).
 #
-# ⚠️ 외부 노출 경로(Caddy 연동)는 두 가지 중 하나를 선택해야 한다 — README 참고.
+# ⚠️ 외부 노출 경로(Caddy 연동)는 docs/DEPLOY.md 참고.
+#
+# name: 프로젝트명을 명시 고정한다.
+#   compose 파일 경로가 tan-kim과 동일한 infra/docker-compose.yml 이라,
+#   명시하지 않으면 양쪽 프로젝트명이 둘 다 "infra"로 충돌한다.
+#   (그 경우 --remove-orphans가 상대 프로젝트 컨테이너를 고아로 보고 삭제함)
+name: namuwiki
 services:
   meilisearch:
     image: getmeili/meilisearch:v1.10
@@ -63,12 +69,12 @@ services:
 
 networks:
   namu-internal:
-  # 기존 tan-kim Caddy가 속한 네트워크를 외부 네트워크로 참조한다.
-  # ⚠️ 실제 네트워크명은 서버에서 `docker network ls`로 확인 후 교체할 것.
-  #    (tan-kim compose가 infra/ 에서 실행되면 보통 infra_internal)
+  # 중립 공유 네트워크 "edge". tan-kim Caddy와 namuwiki를 잇는 유일한 접점.
+  # 어느 프로젝트도 소유하지 않는다(external) → compose down으로 삭제되지 않음.
+  # 사전 생성 필요: `docker network create edge` (배포 스크립트가 멱등 생성).
   caddy-shared:
     external: true
-    name: infra_internal
+    name: edge
 
 volumes:
   meili_data:

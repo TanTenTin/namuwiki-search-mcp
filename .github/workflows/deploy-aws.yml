@@ -47,10 +47,13 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ "${{ secrets.AWS_USER }}@${{ secrets.AWS_HOST }}:~/namuwiki-search-mcp/"
 
-      # 서버에서 재빌드 후 기동. --remove-orphans로 이름 바뀐 컨테이너 정리.
+      # 서버에서 재빌드 후 기동.
+      #  - edge 네트워크 멱등 생성 (이미 있으면 통과). tan-kim과 공유하는 중립 망.
+      #  - --remove-orphans는 name:namuwiki 프로젝트 범위로만 동작 (tan-kim 무영향).
       - name: Build and restart containers
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.AWS_USER }}@${{ secrets.AWS_HOST }}" \
             'cd ~/namuwiki-search-mcp && \
+             docker network create edge 2>/dev/null || true && \
              docker compose -f infra/docker-compose.yml build && \
              docker compose -f infra/docker-compose.yml up -d --remove-orphans'

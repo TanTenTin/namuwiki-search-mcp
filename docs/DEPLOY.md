@@ -55,29 +55,33 @@ MEILISEARCH_INDEX=namuwiki
 
 > `NAMU_MCP_BEARER_TOKEN`은 compose가 아니라 **Caddy 컨테이너** 환경에 넣는다 (1-2 참고).
 
-### 1-2. Caddy 연동 (외부 노출)
+### 1-2. tan-kim 프로젝트와의 분리 / Caddy 연동
 
-기존 tan-kim Caddy가 80/443을 점유하므로 **별도 Caddy를 띄우지 않고** 기존 Caddy에 합친다.
+두 프로젝트는 compose 파일 경로가 같아(`infra/docker-compose.yml`) 프로젝트명이 충돌할 수 있으므로,
+namuwiki compose는 `name: namuwiki`로 프로젝트명을 고정해 완전히 분리한다.
+유일한 접점은 중립 공유 네트워크 `edge`다 (어느 쪽도 소유하지 않음 = `external`).
 
-1. **공유 네트워크명 확인** — namuwiki 컨테이너가 기존 Caddy와 같은 도커 네트워크에 있어야 한다:
+> tan-kim 레포에도 대응 변경이 적용되어 있다 (Caddyfile에 `mcp.tan-kim.com` 블록,
+> caddy 서비스에 `edge` 네트워크 + `NAMU_MCP_BEARER_TOKEN`, 배포 스크립트에 `edge` 멱등 생성).
+> tan-kim 변경분은 별도로 커밋·배포해야 한다.
+
+**서버에서 할 일:**
+
+1. **중립 네트워크 생성 (최초 1회)** — 배포 스크립트가 멱등 생성하지만, 수동으로 먼저 만들어도 된다:
    ```bash
-   docker network ls
-   # 기존 Caddy가 붙은 네트워크명 확인 (tan-kim이 infra/에서 실행되면 보통 infra_internal)
-   docker inspect <caddy_container_name> --format '{{json .NetworkSettings.Networks}}'
+   docker network create edge 2>/dev/null || true
    ```
-2. `infra/docker-compose.yml` 하단 `caddy-shared.name` 값을 위에서 확인한 실제 네트워크명으로 교체.
-3. **Caddyfile에 블록 추가** — `infra/Caddyfile.snippet` 내용을 기존 Caddyfile에 추가.
-   이미 `mcp.tan-kim.com {}` 블록이 있으면 그 안에 `handle` 두 개만 넣는다.
-4. **Caddy 컨테이너에 토큰 주입** — 기존 Caddy compose의 environment에 추가:
-   ```yaml
-   environment:
-     NAMU_MCP_BEARER_TOKEN: <강력한 랜덤 토큰>
+2. **tan-kim Caddy에 토큰 주입** — tan-kim 서버의 `~/tan-kim/infra/.env`에 추가:
+   ```env
+   NAMU_MCP_BEARER_TOKEN=<강력한 랜덤 토큰>
    ```
-5. Caddy reload:
+3. **tan-kim 재배포 또는 Caddy reload** — 위 변경(Caddyfile/compose)을 반영:
    ```bash
-   docker compose -f <기존 caddy compose> up -d
-   # 또는 docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile
+   cd ~/tan-kim
+   docker compose -f infra/docker-compose.yml up -d
    ```
+
+> `infra/Caddyfile.snippet`은 tan-kim Caddyfile에 들어간 내용과 동일한 참고용 사본이다.
 
 ### 1-3. 기동
 
