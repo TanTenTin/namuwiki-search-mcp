@@ -36,7 +36,7 @@ export function createApp(engine: SearchEngine) {
  */
 export async function startServer(): Promise<void> {
   const config = loadConfig();
-  const engine = createSearchEngine(config);
+  const engine = await createSearchEngine(config);
   await engine.init();
 
   const app = createApp(engine);

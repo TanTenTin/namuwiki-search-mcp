@@ -1,0 +1,30 @@
+# 기존 tan-kim 서버의 Caddyfile에 추가할 블록 (경로 기반 라우팅).
+# namuwiki는 별도 Caddy를 띄우지 않는다 — 기존 Caddy(80/443)를 재사용한다.
+#
+# 도메인 mcp.tan-kim.com 아래 경로로 namuwiki 서비스를 노출한다:
+#   - https://mcp.tan-kim.com/namuwiki        → MCP 서버 (Claude 클라이언트, Bearer 보호)
+#   - https://mcp.tan-kim.com/namuwiki-meili  → Meilisearch (Vercel REST API 전용)
+#
+# 기존에 mcp.tan-kim.com 블록이 이미 있으면, 그 블록 "안"에 아래 handle 들만 넣는다.
+# 없으면 이 블록 전체를 추가한다.
+# 필요한 환경변수: NAMU_MCP_BEARER_TOKEN (기존 Caddy 컨테이너에 주입)
+
+mcp.tan-kim.com {
+	# ── 나무위키 MCP 엔드포인트 (Bearer 토큰 보호) ──
+	# /namuwiki, /namuwiki/* 둘 다 매칭 후 prefix 제거 → MCP 서버 루트로 전달
+	@namu_mcp path /namuwiki /namuwiki/*
+	handle @namu_mcp {
+		@authorized header Authorization "Bearer {$NAMU_MCP_BEARER_TOKEN}"
+		handle @authorized {
+			uri strip_prefix /namuwiki
+			reverse_proxy namu-mcp:3001
+		}
+		respond "Unauthorized" 401
+	}
+
+	# ── 나무위키 Meilisearch (Vercel REST API 전용) ──
+	# Meilisearch 자체 API key로 보호되므로 Caddy는 prefix 제거 + 프록시만 한다.
+	handle_path /namuwiki-meili/* {
+		reverse_proxy namu-meilisearch:7700
+	}
+}

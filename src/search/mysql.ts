@@ -50,9 +50,12 @@ export class MysqlSearchEngine implements SearchEngine {
       database: this.conn.database,
       charset: "utf8mb4",
       waitForConnections: true,
-      connectionLimit: 5,
-      // 대량 배치 INSERT를 한 문장으로 보내기 위해 필요
+      // 재시도 중 hang된 커넥션이 쌓여도 여유가 있도록 넉넉히 둔다.
+      connectionLimit: 10,
       multipleStatements: false,
+      // 원격 RDS 장시간 연결 중 끊김 감지를 위해 TCP keepalive 활성화.
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10000,
     });
 
     // 문서 테이블 + ngram FULLTEXT 인덱스 생성.
@@ -97,16 +100,58 @@ export class MysqlSearchEngine implements SearchEngine {
       );
     }
 
-    await pool.query(
-      `INSERT INTO documents (id, namespace, title, text, contributors)
+    const sql = `INSERT INTO documents (id, namespace, title, text, contributors)
        VALUES ${placeholders}
        ON DUPLICATE KEY UPDATE
          namespace = VALUES(namespace),
          title = VALUES(title),
          text = VALUES(text),
-         contributors = VALUES(contributors)`,
-      values,
-    );
+         contributors = VALUES(contributors)`;
+
+    await this.execWithRetry(sql, values);
+  }
+
+  /**
+   * 배치 INSERT를 타임아웃 + 재시도로 실행한다.
+   *
+   * 원격 RDS는 장시간 연결 중 네트워크 stall이 발생하면 쿼리가 무한 대기할 수
+   * 있다(mysql2 자체 쿼리 타임아웃이 약함). Promise.race로 타임아웃을 걸고,
+   * 실패 시 점진적 백오프로 재시도한다. upsert(ON DUPLICATE KEY)라 타임아웃 난
+   * 쿼리가 실제로는 성공했더라도 재시도가 중복을 만들지 않는다.
+   */
+  private async execWithRetry(
+    sql: string,
+    values: Array<string>,
+    attempt = 1,
+  ): Promise<void> {
+    const MAX_ATTEMPTS = 4;
+    const TIMEOUT_MS = 30000;
+    try {
+      await this.queryWithTimeout(sql, values, TIMEOUT_MS);
+    } catch (err) {
+      if (attempt >= MAX_ATTEMPTS) throw err;
+      console.error(
+        `[mysql] 배치 INSERT 실패(시도 ${attempt}/${MAX_ATTEMPTS}): ` +
+          `${err instanceof Error ? err.message : String(err)} → 재시도`,
+      );
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      return this.execWithRetry(sql, values, attempt + 1);
+    }
+  }
+
+  /** Promise.race로 쿼리에 강제 타임아웃을 건다. */
+  private queryWithTimeout(
+    sql: string,
+    values: Array<string>,
+    ms: number,
+  ): Promise<void> {
+    const pool = this.ensurePool();
+    return Promise.race([
+      pool.query(sql, values).then(() => undefined),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`쿼리 타임아웃(${ms}ms)`)), ms),
+      ),
+    ]);
   }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {

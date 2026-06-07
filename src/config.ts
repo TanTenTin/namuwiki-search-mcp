@@ -7,9 +7,6 @@
 
 import "dotenv/config";
 import type { SearchEngine } from "./search/engine.js";
-import { SqliteSearchEngine } from "./search/sqlite.js";
-import { MeilisearchEngine } from "./search/meilisearch.js";
-import { MysqlSearchEngine } from "./search/mysql.js";
 
 export interface AppConfig {
   searchEngine: "meilisearch" | "sqlite" | "mysql";
@@ -73,9 +70,14 @@ export function loadConfig(): AppConfig {
 
 /**
  * 설정에 맞는 검색 엔진 인스턴스를 생성한다 (init은 호출하지 않음).
+ *
+ * 엔진 모듈을 동적 import한다 → 선택된 엔진의 의존성만 로드된다.
+ * (Vercel에서 meilisearch만 쓸 때 better-sqlite3 네이티브 모듈이 로드되어
+ *  빌드/런타임이 깨지는 문제를 방지한다.)
  */
-export function createSearchEngine(config: AppConfig): SearchEngine {
+export async function createSearchEngine(config: AppConfig): Promise<SearchEngine> {
   if (config.searchEngine === "meilisearch") {
+    const { MeilisearchEngine } = await import("./search/meilisearch.js");
     return new MeilisearchEngine(
       config.meilisearch.host,
       config.meilisearch.apiKey,
@@ -83,7 +85,9 @@ export function createSearchEngine(config: AppConfig): SearchEngine {
     );
   }
   if (config.searchEngine === "mysql") {
+    const { MysqlSearchEngine } = await import("./search/mysql.js");
     return new MysqlSearchEngine(config.mysql);
   }
+  const { SqliteSearchEngine } = await import("./search/sqlite.js");
   return new SqliteSearchEngine(config.sqlite.dbPath);
 }

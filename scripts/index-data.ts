@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   const limit = args.limit ? Number(args.limit) : undefined;
 
   const config = loadConfig();
-  const engine = createSearchEngine(config);
+  const engine = await createSearchEngine(config);
   await engine.init();
 
   console.error(
