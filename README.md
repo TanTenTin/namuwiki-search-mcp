@@ -14,23 +14,27 @@
 ```
 ┌───────────┐   HTTP GET /search        ┌──────────────┐
 │ MCP 서버  │ ───────────────────────→  │  REST API     │
-│ (stdio)   │   HTTP GET /article/:t    │  (Express)    │
+│ stdio/http│   HTTP GET /article/:t    │  (Express)    │
 └───────────┘ ←─────────────────────── └──────┬───────┘
    얇은 클라이언트       JSON 응답               │ 직접 호출
                                                 ↓
                                        ┌──────────────┐
                                        │ SearchEngine │  ← 추상화 인터페이스
                                        └──────┬───────┘
-                                       ┌──────┴───────┐
-                                       ↓              ↓
-                                 ┌──────────┐  ┌──────────────┐
-                                 │ SQLite   │  │ Meilisearch  │
-                                 │ FTS5     │  │              │
-                                 └──────────┘  └──────────────┘
+                              ┌───────────────┼───────────────┐
+                              ↓               ↓               ↓
+                        ┌──────────┐  ┌──────────────┐  ┌──────────┐
+                        │ SQLite   │  │ Meilisearch  │  │ MySQL    │
+                        │ FTS5     │  │              │  │ (RDS)    │
+                        └──────────┘  └──────────────┘  └──────────┘
 ```
 
-- **SQLite FTS5**: 외부 서비스 불필요, 단일 파일 DB. 로컬 테스트 기본값.
+- **SQLite FTS5**: 외부 서비스 불필요, 단일 파일 DB. 로컬 테스트 기본값(`SEARCH_ENGINE=sqlite`).
 - **Meilisearch**: 한국어 검색 품질·대용량에 유리. Docker로 기동.
+- **MySQL (InnoDB FULLTEXT + ngram)**: **운영 기본값**. AWS RDS에 두고 `namu-api`가 연결(`SEARCH_ENGINE=mysql`).
+
+MCP 트랜스포트는 로컬 연동 시 `stdio`, 원격 배포 시 `http`(Streamable HTTP)다.
+운영 배포(Lightsail + RDS + Caddy)는 [docs/DEPLOY.md](docs/DEPLOY.md)를 참조한다.
 
 ---
 
@@ -141,12 +145,16 @@ npm run api
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `SEARCH_ENGINE` | `sqlite` | 검색 엔진 (`sqlite` \| `meilisearch`) |
+| `SEARCH_ENGINE` | `sqlite` | 검색 엔진 (`sqlite` \| `meilisearch` \| `mysql`). 운영은 `mysql` |
 | `SQLITE_DB_PATH` | `./data/namuwiki.db` | SQLite DB 경로 |
 | `MEILISEARCH_HOST` | `http://localhost:7700` | Meilisearch 호스트 |
+| `MYSQL_HOST` / `MYSQL_PORT` | `localhost` / `3306` | MySQL(RDS) 접속 호스트·포트 |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | `root` / `` | MySQL 자격증명 |
+| `MYSQL_DATABASE` | `namuwiki` | MySQL 데이터베이스명 |
 | `API_PORT` | `3000` | REST API 포트 |
 | `API_BASE_URL` | `http://localhost:3000` | MCP가 호출할 REST API 주소 |
-| `MCP_TRANSPORT` | `stdio` | MCP 트랜스포트 |
+| `MCP_TRANSPORT` | `stdio` | MCP 트랜스포트 (`stdio` \| `http`). 원격 배포는 `http` |
+| `MCP_HTTP_PORT` | `3001` | `http` 트랜스포트 포트 |
 
 ---
 
@@ -159,7 +167,8 @@ src/
 ├── search/
 │   ├── engine.ts           # SearchEngine 인터페이스
 │   ├── sqlite.ts           # SQLite FTS5 구현체
-│   └── meilisearch.ts      # Meilisearch 구현체
+│   ├── meilisearch.ts      # Meilisearch 구현체
+│   └── mysql.ts            # MySQL(RDS, FULLTEXT) 구현체 — 운영 기본
 ├── indexer/
 │   ├── markup.ts           # 나무위키 마크업 정제 + 스니펫
 │   ├── dump-parser.ts      # 덤프 JSON 스트리밍 파서

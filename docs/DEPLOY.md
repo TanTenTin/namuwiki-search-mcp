@@ -1,46 +1,52 @@
 # 배포 가이드
 
-REST API는 **Vercel**, MCP 서버 + 내부 api는 **AWS Lightsail**(기존 tan-kim 서버), 검색 데이터는 **AWS RDS(MySQL)** 에 둔다.
-**Vercel은 RDS에 직접 붙지 않고 Lightsail 내부 api를 경유**한다 → DB 자격증명이 Vercel에 없고, RDS는 Lightsail 고정 IP만 허용하면 된다.
+REST API와 MCP 서버를 모두 **AWS Lightsail**(기존 tan-kim 서버)에서 Docker로 운영한다.
+검색 데이터는 **AWS RDS(MySQL)** 에 둔다. **Vercel은 더 이상 사용하지 않는다.**
+
+- REST API : `api.tan-kim.com/namuwiki` 로 공개 노출 (rate-limit만, Bearer 없음)
+- MCP 서버 : `mcp.tan-kim.com/namuwiki` 로 노출 (Caddy Bearer 보호)
+
+TLS 종료/도메인 라우팅(Caddy)은 별도 [caddy-config](https://github.com/TanTenTin/caddy-config) 레포가 담당한다.
+이 레포는 `api`/`mcp` 컨테이너만 배포하고, 공유 네트워크 `edge`로 Caddy와 연결된다.
 
 ## 아키텍처
 
 ```
-┌────────────────────────┐                  ┌──────────────────────────────────────┐
-│  Vercel (무료)         │                  │  AWS Lightsail (기존 tan-kim 서버)    │
-│  REST API              │                  │  ┌──────────────────────────────────┐ │
-│  (RemoteSearchEngine,  │                  │  │  Caddy (기존, 80/443)             │ │
-│   DB 자격증명 없음)    │                  │  │   /namuwiki     → namu-mcp:3001    │ │
-│  SEARCH_ENGINE=remote  │ ──HTTPS+Bearer→  │  │   /namuwiki-api → namu-api:3000    │ │
-└────────────────────────┘ (/namuwiki-api)  │  └──────┬───────────────┬───────────┘ │
-                                            │  edge망 │        namu-internal망       │
-   Claude ──MCP HTTP+Bearer───────────────→ │  ┌──────┴──────┐ ┌──────┴───────────┐ │
-   (/namuwiki)                              │  │ namu-mcp     │→│ namu-api          │ │
-                                            │  └─────────────┘ └────────┬──────────┘ │
-                                            └───────────────────────────┼────────────┘
-                                                                        │ MySQL
-                                                                        ↓
-                                                              ┌────────────────────┐
-                                                              │  AWS RDS (MySQL)   │
-                                                              │  Lightsail IP만 허용│
-                                                              └────────────────────┘
+┌─ Vercel ───────────┐        ┌─ AWS Lightsail (단일 VM) ───────────────────────────┐
+│ tan-kim/frontend   │        │                                                      │
+└─────────┬──────────┘        │  [caddy-config 레포] Caddy (80/443)                  │
+          │ https://api.tan-kim.com    api.tan-kim.com/namuwiki  → namu-api:3000     │
+          ▼                    │       mcp.tan-kim.com/namuwiki  → namu-mcp:3001 ─┐   │
+   api.tan-kim.com ───────────►│                                  (Bearer)        │   │
+   (검색 사용자)               │       edge 공유망 │        namu-internal 망       │   │
+                               │  ┌──────────────┐ │ ┌──────────────┐ ┌──────────┐│   │
+   Claude ──MCP+Bearer────────►│  │ namu-mcp      │─┼►│ namu-api      │ │ (this    ││   │
+   mcp.tan-kim.com/namuwiki    │  └──────────────┘ │ └──────┬───────┘ │  repo)   ││   │
+                               │                   │        │ MySQL    └──────────┘│   │
+                               └───────────────────┼────────┼─────────────────────┘   │
+                                                   │        ▼                          │
+                                                   │  ┌────────────────────┐           │
+                                                   │  │  AWS RDS (MySQL)    │           │
+                                                   │  │  Lightsail IP만 허용│           │
+                                                   │  └────────────────────┘           │
+                                                   └───────────────────────────────────┘
 ```
 
-- **Vercel = 얇은 프록시**: 검색 요청을 `mcp.tan-kim.com/namuwiki-api`(Lightsail api)로 위임. DB에 직접 접근하지 않음.
-- **namu-api만 RDS 연결**: RDS 보안 그룹은 Lightsail 고정 IP만 3306 허용하면 됨 (Vercel 동적 IP 문제 해소).
-- **MCP 서버**: 내부 `namu-api:3000` 호출 (Vercel과 같은 api를 공유).
-- **포트 충돌 없음**: 호스트 포트 바인딩 없음. 외부 노출은 기존 Caddy 경로만.
+- **REST API(namu-api)**: RDS(MySQL)에 연결해 검색을 수행한다. Caddy가 `/namuwiki` prefix를 제거하고 공개 노출한다.
+- **MCP(namu-mcp)**: 내부 `namu-api:3000`을 호출하는 얇은 클라이언트. 공개 경로를 거치지 않는다.
+- **RDS**: 보안 그룹에서 Lightsail 고정 IP만 3306 허용하면 된다.
+- **포트 충돌 없음**: 호스트 포트 바인딩 없음. 외부 노출은 Caddy 경로뿐.
 
 ---
 
-## 1. Lightsail 배포 (MCP + 내부 api)
+## 1. Lightsail 배포 (REST API + MCP)
 
 ### 1-1. 초기 서버 설정 (최초 1회)
 
 ```bash
 ssh <AWS_USER>@<AWS_HOST>
-git clone https://github.com/<owner>/namuwiki-search-mcp.git ~/namuwiki-search-mcp
-nano ~/namuwiki-search-mcp/infra/.env   # infra/server-secrets.example 참고
+git clone https://github.com/TanTenTin/namuwiki-search-mcp.git ~/namuwiki-search-mcp
+nano ~/namuwiki-search-mcp/infra/.env   # infra/server-secrets.example 참고 (RDS 자격증명)
 ```
 
 `infra/.env` (compose가 읽는다 — RDS 자격증명):
@@ -53,30 +59,29 @@ MYSQL_PASSWORD=<RDS 비밀번호>
 MYSQL_DATABASE=namuwiki
 ```
 
-### 1-2. tan-kim 분리 / Caddy 연동
+### 1-2. Caddy 연동 (caddy-config 레포)
 
-namuwiki는 `name: namuwiki`로 분리하고, 중립 공유망 `edge`로 tan-kim Caddy와 연결한다.
-tan-kim Caddy는 두 경로를 추가로 노출한다:
+Caddy는 별도 [caddy-config](https://github.com/TanTenTin/caddy-config) 레포가 소유한다.
+namuwiki는 중립 공유망 `edge`로 그 Caddy와 연결된다. caddy-config의 `Caddyfile`이 이미
+아래 두 경로를 노출한다:
 
-- `/namuwiki`     → namu-mcp:3001  (Claude, `NAMU_MCP_BEARER_TOKEN` 보호)
-- `/namuwiki-api` → namu-api:3000  (Vercel, `NAMU_API_TOKEN` 보호)
+- `api.tan-kim.com/namuwiki` → `namu-api:3000`  (공개, rate-limit)
+- `mcp.tan-kim.com/namuwiki` → `namu-mcp:3001`  (`NAMU_MCP_BEARER_TOKEN` 보호)
 
-서버에서:
+MCP 보호 토큰은 **caddy-config 레포의 `~/caddy-config/.env`** 에 둔다 (이 레포가 아님):
 
 ```bash
-docker network create edge 2>/dev/null || true
-
-# tan-kim Caddy에 두 토큰 주입 (~/tan-kim/infra/.env)
-echo 'NAMU_MCP_BEARER_TOKEN=<랜덤 토큰1>' >> ~/tan-kim/infra/.env
-echo 'NAMU_API_TOKEN=<랜덤 토큰2>'        >> ~/tan-kim/infra/.env
-
-cd ~/tan-kim && docker compose -f infra/docker-compose.yml up -d   # Caddy 반영
+# caddy-config 서버 측 .env
+echo 'NAMU_MCP_BEARER_TOKEN=<랜덤 토큰>' >> ~/caddy-config/.env
+cd ~/caddy-config && docker compose up -d && \
+  docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
 ### 1-3. 기동
 
 ```bash
 cd ~/namuwiki-search-mcp
+docker network create edge 2>/dev/null || true
 docker compose -f infra/docker-compose.yml build
 docker compose -f infra/docker-compose.yml up -d --remove-orphans
 ```
@@ -102,49 +107,18 @@ docker compose -f infra/docker-compose.yml exec api \
 
 ---
 
-## 3. Vercel 배포 (REST API = 프록시)
-
-### 3-1. 프로젝트 설정
-- Root Directory `./`, Framework Preset `Other`, Node 20.x, (선택) Region `Seoul (icn1)`
-
-### 3-2. 환경변수 (Production)
-
-| 변수 | 값 |
-|------|----|
-| `SEARCH_ENGINE` | `remote` |
-| `REMOTE_API_BASE_URL` | `https://mcp.tan-kim.com/namuwiki-api` |
-| `REMOTE_API_TOKEN` | `<NAMU_API_TOKEN 과 동일 값>` |
-
-> Vercel에는 **DB 자격증명을 두지 않는다.** 기존 `MYSQL_*`, `MEILISEARCH_*`는 삭제.
-> 변경 후 **재배포** 필요.
-
-### 3-3. 도메인 (api.tan-kim.com/namuwiki)
-
-tan-kim 백엔드 `apps/backend/vercel.json`에 프록시 rewrite를 catch-all보다 먼저 추가:
-
-```json
-{
-  "rewrites": [
-    { "source": "/namuwiki/:path*", "destination": "https://namuwiki-search-mcp.vercel.app/:path*" },
-    { "source": "/(.*)", "destination": "/api/index" }
-  ]
-}
-```
-
----
-
 ## 엔드포인트 요약
 
 | 용도 | URL | 인증 |
 |------|-----|------|
-| REST API | `https://api.tan-kim.com/namuwiki/search?q=...` | 없음 (필요 시 추가) |
-| REST API (직접) | `https://namuwiki-search-mcp.vercel.app/search?q=...` | 없음 |
-| 내부 api (Vercel 전용) | `https://mcp.tan-kim.com/namuwiki-api` | Bearer (`NAMU_API_TOKEN`) |
+| REST API 검색 | `https://api.tan-kim.com/namuwiki/search?q=...` | 없음 (rate-limit) |
+| REST API 문서 | `https://api.tan-kim.com/namuwiki/article/<제목>` | 없음 |
+| REST API 헬스 | `https://api.tan-kim.com/namuwiki/health` | 없음 |
 | MCP (Claude) | `https://mcp.tan-kim.com/namuwiki` | Bearer (`NAMU_MCP_BEARER_TOKEN`) |
 
 ---
 
-## 4. Claude Code에 MCP 등록
+## 3. Claude Code에 MCP 등록
 
 ```json
 {
