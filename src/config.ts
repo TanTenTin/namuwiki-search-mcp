@@ -9,9 +9,10 @@ import "dotenv/config";
 import type { SearchEngine } from "./search/engine.js";
 import { SqliteSearchEngine } from "./search/sqlite.js";
 import { MeilisearchEngine } from "./search/meilisearch.js";
+import { MysqlSearchEngine } from "./search/mysql.js";
 
 export interface AppConfig {
-  searchEngine: "meilisearch" | "sqlite";
+  searchEngine: "meilisearch" | "sqlite" | "mysql";
   meilisearch: {
     host: string;
     apiKey: string;
@@ -19,6 +20,13 @@ export interface AppConfig {
   };
   sqlite: {
     dbPath: string;
+  };
+  mysql: {
+    host: string;
+    port: number;
+    user: string;
+    password: string;
+    database: string;
   };
   apiPort: number;
   mcp: {
@@ -34,9 +42,11 @@ export interface AppConfig {
  */
 export function loadConfig(): AppConfig {
   const engine = (process.env.SEARCH_ENGINE ?? "sqlite").toLowerCase();
+  const searchEngine: AppConfig["searchEngine"] =
+    engine === "meilisearch" ? "meilisearch" : engine === "mysql" ? "mysql" : "sqlite";
 
   return {
-    searchEngine: engine === "meilisearch" ? "meilisearch" : "sqlite",
+    searchEngine,
     meilisearch: {
       host: process.env.MEILISEARCH_HOST ?? "http://localhost:7700",
       apiKey: process.env.MEILISEARCH_API_KEY ?? "masterKey",
@@ -44,6 +54,13 @@ export function loadConfig(): AppConfig {
     },
     sqlite: {
       dbPath: process.env.SQLITE_DB_PATH ?? "./data/namuwiki.db",
+    },
+    mysql: {
+      host: process.env.MYSQL_HOST ?? "localhost",
+      port: Number(process.env.MYSQL_PORT ?? 3306),
+      user: process.env.MYSQL_USER ?? "root",
+      password: process.env.MYSQL_PASSWORD ?? "",
+      database: process.env.MYSQL_DATABASE ?? "namuwiki",
     },
     apiPort: Number(process.env.API_PORT ?? 3000),
     mcp: {
@@ -64,6 +81,9 @@ export function createSearchEngine(config: AppConfig): SearchEngine {
       config.meilisearch.apiKey,
       config.meilisearch.index,
     );
+  }
+  if (config.searchEngine === "mysql") {
+    return new MysqlSearchEngine(config.mysql);
   }
   return new SqliteSearchEngine(config.sqlite.dbPath);
 }

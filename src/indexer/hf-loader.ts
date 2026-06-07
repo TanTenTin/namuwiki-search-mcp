@@ -64,7 +64,7 @@ function normalizeParquetRow(row: Record<string, unknown>): NamuDocument {
  * @returns NamuDocument를 하나씩 내보내는 async generator
  */
 export async function* loadHuggingFaceParquet(
-  options: { parquetUrl?: string } = {},
+  options: { parquetUrl?: string; startRow?: number } = {},
 ): AsyncGenerator<NamuDocument> {
   const url = options.parquetUrl ?? DEFAULT_PARQUET_URL;
 
@@ -72,8 +72,11 @@ export async function* loadHuggingFaceParquet(
   const meta = await parquetMetadataAsync(file);
   const total = Number(meta.num_rows);
 
+  // startRow가 주어지면 그 행부터 읽어 이미 색인된 앞부분을 건너뛴다.
+  const begin = options.startRow && options.startRow > 0 ? options.startRow : 0;
+
   // 청크 단위로 읽어 yield한다. 호출 측이 break하면 다음 청크는 읽지 않는다.
-  for (let start = 0; start < total; start += PARQUET_CHUNK) {
+  for (let start = begin; start < total; start += PARQUET_CHUNK) {
     const end = Math.min(start + PARQUET_CHUNK, total);
     const rows = (await parquetReadObjects({
       file,

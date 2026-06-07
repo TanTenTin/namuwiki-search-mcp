@@ -32,6 +32,7 @@
     "hyparquet": "^1.26.0",
     "hyparquet-compressors": "^1.1.1",
     "meilisearch": "^0.45.0",
+    "mysql2": "^3.22.5",
     "stream-json": "^1.8.0",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.5"

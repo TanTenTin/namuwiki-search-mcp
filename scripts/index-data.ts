@@ -77,6 +77,7 @@ async function main(): Promise<void> {
       } else {
         stream = loadHuggingFaceParquet({
           parquetUrl: args.url as string | undefined,
+          startRow: args.skip ? Number(args.skip) : undefined,
         });
       }
       break;
