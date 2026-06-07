@@ -1,0 +1,33 @@
+# 의존성
+node_modules/
+
+# 빌드 산출물
+dist/
+*.tsbuildinfo
+
+# 환경 변수 (시크릿 포함 가능)
+.env
+.env.*
+!.env.example
+
+# 로그
+*.log
+npm-debug.log*
+
+# 데이터 (덤프, 인덱스 DB 등 대용량 — 저장소에 올리지 않음)
+data/*
+!data/.gitkeep
+!data/sample.json
+# SQLite 부속 파일 (혹시 data/ 밖에 생겨도 무시)
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 에디터
+.vscode/
+.idea/
+*.swp

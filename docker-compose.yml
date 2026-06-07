@@ -1,0 +1,18 @@
+# Meilisearch 컨테이너.
+# SEARCH_ENGINE=meilisearch로 운영할 때만 필요하다.
+# 로컬 스모크 테스트(SEARCH_ENGINE=sqlite)는 이 컨테이너 없이 동작한다.
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    container_name: namuwiki-meilisearch
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: masterKey
+      MEILI_ENV: development
+    volumes:
+      - meili_data:/meili_data
+    restart: unless-stopped
+
+volumes:
+  meili_data:

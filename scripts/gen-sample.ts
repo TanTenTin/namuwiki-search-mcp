@@ -1,0 +1,80 @@
+/**
+ * 로컬 테스트용 샘플 덤프 데이터 생성 스크립트.
+ *
+ * 12GB 실제 덤프 없이도 인덱싱→검색→API→MCP 흐름을 검증할 수 있도록
+ * 나무위키 마크업이 포함된 소량의 샘플 문서를 data/sample.json에 만든다.
+ *
+ * 형식은 실제 덤프와 동일하다 (문서 객체의 배열).
+ *
+ * 실행: npm run gen-sample
+ */
+
+import { writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import type { NamuDocument } from "../src/types/index.js";
+
+const OUT_PATH = "./data/sample.json";
+
+const samples: NamuDocument[] = [
+  {
+    namespace: "문서",
+    title: "나무위키",
+    text: `'''나무위키'''는 [[위키]] 기반의 [[지식 백과]] 사이트이다. {{{#blue 한국어}}} 위키 중 하나로, 2015년에 개설되었다.
+== 특징 ==
+* 누구나 편집할 수 있다.
+* [[CC BY-SA 2.0 KR]] 라이선스를 따른다.
+[* 출처: 나무위키 자체 문서]`,
+    contributors: ["익명1", "익명2"],
+  },
+  {
+    namespace: "문서",
+    title: "TypeScript",
+    text: `'''TypeScript'''(타입스크립트)는 [[마이크로소프트]]가 개발한 [[프로그래밍 언어]]이다. [[JavaScript]]에 정적 타입을 추가한 상위 집합(superset)이다.
+== 특징 ==
+* 정적 타입 검사
+* {{{#green 컴파일 단계}}}에서 오류를 잡는다.
+* 대규모 애플리케이션 개발에 적합하다.`,
+    contributors: ["dev_kim", "ts_lover"],
+  },
+  {
+    namespace: "문서",
+    title: "Model Context Protocol",
+    text: `'''Model Context Protocol'''(MCP)은 [[Anthropic]]이 제안한 [[AI 에이전트]]와 외부 도구를 연결하는 개방형 프로토콜이다.
+== 구성 ==
+* MCP 서버는 도구(tool)와 리소스를 노출한다.
+* [[Claude]] 같은 AI 클라이언트가 이를 호출한다.
+* {{{+1 stdio}}} 또는 HTTP 트랜스포트를 사용한다.`,
+    contributors: ["ai_researcher"],
+  },
+  {
+    namespace: "문서",
+    title: "Meilisearch",
+    text: `'''Meilisearch'''(밀리서치)는 오픈소스 [[검색 엔진]]이다. 빠른 [[전문 검색]](full-text search)과 오타 교정 기능을 제공한다.
+== 특징 ==
+* [[RESTful API]] 제공
+* 가벼운 설치와 빠른 인덱싱
+* [[Rust]]로 작성되었다.`,
+    contributors: ["search_fan", "rustacean"],
+  },
+  {
+    namespace: "문서",
+    title: "SQLite",
+    text: `'''SQLite'''(에스큐엘라이트)는 서버가 필요 없는 [[관계형 데이터베이스]]이다. 단일 파일에 데이터를 저장한다.
+== 특징 ==
+* 설정이 필요 없다(serverless).
+* [[FTS5]] 확장으로 전문 검색을 지원한다.
+* 임베디드 환경에서 널리 쓰인다.`,
+    contributors: ["db_admin"],
+  },
+  {
+    namespace: "틀",
+    title: "틀:예시",
+    text: `이 문서는 '''틀''' 네임스페이스의 예시 문서이다. [[분류:틀]]`,
+    contributors: ["template_editor"],
+  },
+];
+
+mkdirSync(dirname(OUT_PATH), { recursive: true });
+writeFileSync(OUT_PATH, JSON.stringify(samples, null, 2), "utf-8");
+
+console.log(`샘플 데이터 ${samples.length}건을 ${OUT_PATH}에 생성했습니다.`);

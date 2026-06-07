@@ -1,0 +1,47 @@
+{
+  "name": "namuwiki-search-mcp",
+  "version": "0.1.0",
+  "description": "나무위키 덤프 기반 검색 REST API 및 MCP 서버 (공익 오픈소스)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "api": "tsx src/api/server.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "index": "tsx scripts/index-data.ts",
+    "gen-sample": "tsx scripts/gen-sample.ts",
+    "test:local": "tsx scripts/test-local.ts",
+    "test:mcp": "tsx scripts/test-mcp.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "namuwiki",
+    "search",
+    "mcp",
+    "meilisearch",
+    "sqlite"
+  ],
+  "license": "CC-BY-SA-2.0-KR",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "hyparquet": "^1.26.0",
+    "hyparquet-compressors": "^1.1.1",
+    "meilisearch": "^0.45.0",
+    "stream-json": "^1.8.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.9.0",
+    "@types/stream-json": "^1.7.8",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
