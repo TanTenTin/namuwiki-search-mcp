@@ -13,7 +13,6 @@
  * 검색 로직은 REST API에만 존재하고, 이 서버는 그 API를 호출하는 클라이언트다.
  */
 
-import { randomUUID } from "node:crypto";
 import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -35,8 +34,9 @@ import {
  * 트랜스포트와 무관하게 동일한 서버/핸들러를 재사용한다.
  * @param config 앱 설정 (REST API 베이스 URL 사용)
  */
-function createMcpServer(config: AppConfig): Server {
-  const client = new NamuApiClient(config.mcp.apiBaseUrl);
+function createMcpServer(config: AppConfig, token?: string): Server {
+  // 상위 클라이언트가 보낸 토큰(= API 키)을 namu-api 호출에 그대로 전달(패스스루).
+  const client = new NamuApiClient(config.mcp.apiBaseUrl, token);
 
   const server = new Server(
     { name: "namuwiki-search-mcp", version: "0.1.0" },
@@ -129,10 +129,17 @@ async function startHttp(config: AppConfig): Promise<void> {
   //  - "/mcp" : 로컬/직접 테스트용
   //  - "/"    : Caddy가 경로 prefix(/namuwiki)를 strip한 뒤 전달하는 운영 경로
   app.post(["/", "/mcp"], async (req, res) => {
+    // 클라이언트가 보낸 Authorization: Bearer <API키>를 추출해 그대로 패스스루한다.
+    const auth = req.headers.authorization;
+    const token =
+      typeof auth === "string" && auth.startsWith("Bearer ")
+        ? auth.slice("Bearer ".length).trim() || undefined
+        : undefined;
     // 요청마다 독립 인스턴스 (stateless)
-    const server = createMcpServer(config);
+    const server = createMcpServer(config, token);
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      // stateless: 세션 ID를 발급하지 않는다(요청마다 독립 처리). 토큰은 매 요청 Authorization에서 재추출.
+      sessionIdGenerator: undefined,
     });
 
     // 응답이 끝나면 리소스 정리

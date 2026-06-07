@@ -9,16 +9,11 @@ import "dotenv/config";
 import type { SearchEngine } from "./search/engine.js";
 
 export interface AppConfig {
-  searchEngine: "meilisearch" | "sqlite" | "mysql" | "remote";
+  searchEngine: "meilisearch" | "sqlite" | "mysql";
   meilisearch: {
     host: string;
     apiKey: string;
     index: string;
-  };
-  /** 원격 REST API로 위임하는 읽기 전용 엔진 설정 (SEARCH_ENGINE=remote) */
-  remote: {
-    baseUrl: string;
-    token: string;
   };
   sqlite: {
     dbPath: string;
@@ -37,6 +32,26 @@ export interface AppConfig {
     /** MCP 서버가 검색 요청을 보낼 REST API의 베이스 URL */
     apiBaseUrl: string;
   };
+  /** REST API 키 인증/발급 설정 */
+  apiKeys: {
+    /** 외부 요청에 API 키를 강제할지 (미지정 시 mysql 엔진이면 true) */
+    required: boolean;
+    /** 발급/폐기 엔드포인트(/admin/keys) 보호용 관리자 토큰 */
+    adminToken: string;
+    /** 키 검증 결과 인메모리 캐시 TTL(ms) */
+    cacheTtlMs: number;
+  };
+  /** 응답 캐시 및 부하 보호 설정 */
+  protection: {
+    /** 응답 캐시 최대 항목 수 */
+    cacheMaxEntries: number;
+    /** 응답 캐시 TTL(ms) */
+    cacheTtlMs: number;
+    /** 동시 처리 요청 상한(초과 시 503) */
+    maxConcurrent: number;
+    /** 요청 처리 타임아웃(ms) */
+    requestTimeoutMs: number;
+  };
 }
 
 /**
@@ -45,13 +60,7 @@ export interface AppConfig {
 export function loadConfig(): AppConfig {
   const engine = (process.env.SEARCH_ENGINE ?? "sqlite").toLowerCase();
   const searchEngine: AppConfig["searchEngine"] =
-    engine === "meilisearch"
-      ? "meilisearch"
-      : engine === "mysql"
-        ? "mysql"
-        : engine === "remote"
-          ? "remote"
-          : "sqlite";
+    engine === "meilisearch" ? "meilisearch" : engine === "mysql" ? "mysql" : "sqlite";
 
   return {
     searchEngine,
@@ -70,15 +79,26 @@ export function loadConfig(): AppConfig {
       password: process.env.MYSQL_PASSWORD ?? "",
       database: process.env.MYSQL_DATABASE ?? "namuwiki",
     },
-    remote: {
-      baseUrl: process.env.REMOTE_API_BASE_URL ?? "http://localhost:3000",
-      token: process.env.REMOTE_API_TOKEN ?? "",
-    },
     apiPort: Number(process.env.API_PORT ?? 3000),
     mcp: {
       transport: (process.env.MCP_TRANSPORT ?? "stdio") === "http" ? "http" : "stdio",
       httpPort: Number(process.env.MCP_HTTP_PORT ?? 3001),
       apiBaseUrl: process.env.API_BASE_URL ?? `http://localhost:${Number(process.env.API_PORT ?? 3000)}`,
+    },
+    apiKeys: {
+      // REQUIRE_API_KEY 미지정 시: 운영(mysql)은 키 필수, 로컬(sqlite 등)은 비활성.
+      required:
+        process.env.REQUIRE_API_KEY != null
+          ? process.env.REQUIRE_API_KEY === "true"
+          : searchEngine === "mysql",
+      adminToken: process.env.ADMIN_API_TOKEN ?? "",
+      cacheTtlMs: Number(process.env.API_KEY_CACHE_TTL_MS ?? 60_000),
+    },
+    protection: {
+      cacheMaxEntries: Number(process.env.CACHE_MAX_ENTRIES ?? 5000),
+      cacheTtlMs: Number(process.env.CACHE_TTL_MS ?? 300_000),
+      maxConcurrent: Number(process.env.MAX_CONCURRENT ?? 20),
+      requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 8000),
     },
   };
 }
@@ -102,10 +122,6 @@ export async function createSearchEngine(config: AppConfig): Promise<SearchEngin
   if (config.searchEngine === "mysql") {
     const { MysqlSearchEngine } = await import("./search/mysql.js");
     return new MysqlSearchEngine(config.mysql);
-  }
-  if (config.searchEngine === "remote") {
-    const { RemoteSearchEngine } = await import("./search/remote.js");
-    return new RemoteSearchEngine(config.remote.baseUrl, config.remote.token);
   }
   const { SqliteSearchEngine } = await import("./search/sqlite.js");
   return new SqliteSearchEngine(config.sqlite.dbPath);

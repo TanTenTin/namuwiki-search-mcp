@@ -59,7 +59,18 @@ export const TOOL_DEFINITIONS = [
  * MCP 툴 구현은 모두 이 클라이언트를 통해 동작한다.
  */
 export class NamuApiClient {
-  constructor(private readonly baseUrl: string) {}
+  private readonly headers: Record<string, string>;
+
+  /**
+   * @param baseUrl REST API 베이스 URL
+   * @param token   상위(MCP 클라이언트)에서 전달받은 API 키. namu-api 인증에 그대로 첨부한다.
+   */
+  constructor(
+    private readonly baseUrl: string,
+    token?: string,
+  ) {
+    this.headers = token ? { Authorization: `Bearer ${token}` } : {};
+  }
 
   /** GET /search */
   async search(input: z.infer<typeof searchInputSchema>): Promise<SearchResponse> {
@@ -68,7 +79,7 @@ export class NamuApiClient {
     if (input.limit != null) url.searchParams.set("limit", String(input.limit));
     if (input.namespace) url.searchParams.set("namespace", input.namespace);
 
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: this.headers });
     if (!res.ok) {
       throw new Error(`검색 API 오류 (${res.status}): ${await res.text()}`);
     }
@@ -85,7 +96,7 @@ export class NamuApiClient {
     );
     if (input.plain_text === false) url.searchParams.set("plain_text", "false");
 
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: this.headers });
     if (!res.ok) {
       throw new Error(`문서 API 오류 (${res.status}): ${await res.text()}`);
     }

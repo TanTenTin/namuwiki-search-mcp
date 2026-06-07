@@ -28,6 +28,16 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-namuwiki}
       API_PORT: "3000"
+      # API 키 인증/발급 (RDS api_keys 테이블). 운영은 키 필수.
+      REQUIRE_API_KEY: ${REQUIRE_API_KEY:-true}
+      # 발급/폐기 엔드포인트(/admin/keys) 보호 토큰. 미설정 시 발급 비활성.
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      # 부하 보호 (선택 — 미지정 시 코드 기본값 사용)
+      CACHE_MAX_ENTRIES: ${CACHE_MAX_ENTRIES:-5000}
+      CACHE_TTL_MS: ${CACHE_TTL_MS:-300000}
+      MAX_CONCURRENT: ${MAX_CONCURRENT:-20}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-8000}
+      API_KEY_CACHE_TTL_MS: ${API_KEY_CACHE_TTL_MS:-60000}
     networks:
       - namu-internal
       # Caddy(api.tan-kim.com/namuwiki)가 이 api를 공개 노출하므로 공유 네트워크 연결.
