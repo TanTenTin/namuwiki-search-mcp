@@ -9,11 +9,16 @@ import "dotenv/config";
 import type { SearchEngine } from "./search/engine.js";
 
 export interface AppConfig {
-  searchEngine: "meilisearch" | "sqlite" | "mysql";
+  searchEngine: "meilisearch" | "sqlite" | "mysql" | "remote";
   meilisearch: {
     host: string;
     apiKey: string;
     index: string;
+  };
+  /** 원격 REST API로 위임하는 읽기 전용 엔진 설정 (SEARCH_ENGINE=remote) */
+  remote: {
+    baseUrl: string;
+    token: string;
   };
   sqlite: {
     dbPath: string;
@@ -40,7 +45,13 @@ export interface AppConfig {
 export function loadConfig(): AppConfig {
   const engine = (process.env.SEARCH_ENGINE ?? "sqlite").toLowerCase();
   const searchEngine: AppConfig["searchEngine"] =
-    engine === "meilisearch" ? "meilisearch" : engine === "mysql" ? "mysql" : "sqlite";
+    engine === "meilisearch"
+      ? "meilisearch"
+      : engine === "mysql"
+        ? "mysql"
+        : engine === "remote"
+          ? "remote"
+          : "sqlite";
 
   return {
     searchEngine,
@@ -58,6 +69,10 @@ export function loadConfig(): AppConfig {
       user: process.env.MYSQL_USER ?? "root",
       password: process.env.MYSQL_PASSWORD ?? "",
       database: process.env.MYSQL_DATABASE ?? "namuwiki",
+    },
+    remote: {
+      baseUrl: process.env.REMOTE_API_BASE_URL ?? "http://localhost:3000",
+      token: process.env.REMOTE_API_TOKEN ?? "",
     },
     apiPort: Number(process.env.API_PORT ?? 3000),
     mcp: {
@@ -87,6 +102,10 @@ export async function createSearchEngine(config: AppConfig): Promise<SearchEngin
   if (config.searchEngine === "mysql") {
     const { MysqlSearchEngine } = await import("./search/mysql.js");
     return new MysqlSearchEngine(config.mysql);
+  }
+  if (config.searchEngine === "remote") {
+    const { RemoteSearchEngine } = await import("./search/remote.js");
+    return new RemoteSearchEngine(config.remote.baseUrl, config.remote.token);
   }
   const { SqliteSearchEngine } = await import("./search/sqlite.js");
   return new SqliteSearchEngine(config.sqlite.dbPath);

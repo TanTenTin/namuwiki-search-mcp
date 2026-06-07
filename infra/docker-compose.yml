@@ -28,6 +28,8 @@ services:
       API_PORT: "3000"
     networks:
       - namu-internal
+      # Vercel이 Caddy(/namuwiki-api)를 통해 이 api를 호출하므로 공유 네트워크 연결.
+      - caddy-shared
 
   mcp:
     build:
