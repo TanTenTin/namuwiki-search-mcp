@@ -30,23 +30,37 @@ export class MeilisearchEngine implements SearchEngine {
   }
 
   async init(): Promise<void> {
-    // 인덱스가 없으면 생성한다 (primaryKey = id).
-    try {
-      await this.client.getIndex(this.indexName);
-    } catch {
-      const task = await this.client.createIndex(this.indexName, { primaryKey: "id" });
-      await this.client.waitForTask(task.taskUid);
-    }
-
+    // 인덱스 참조는 항상 확보한다. client.index()는 로컬 연산이라
+    // 네트워크 호출/권한이 필요 없으므로 어떤 키로도 안전하다.
     this.idx = this.client.index(this.indexName);
 
-    // 검색/필터 가능한 속성을 설정한다.
-    await this.idx.updateSettings({
-      searchableAttributes: ["title", "text"],
-      filterableAttributes: ["namespace"],
-      // 스니펫은 자체 makeSnippet으로 생성하므로 displayed는 전체 유지
-      displayedAttributes: ["id", "namespace", "title", "text", "text_raw", "contributors"],
-    });
+    // 인덱스 생성/설정은 쓰기 권한이 필요하다.
+    // 검색 전용(search-only) 키로 동작하는 읽기 경로(예: Vercel REST API)에서는
+    // 권한이 없어 실패하므로, 실패해도 검색은 계속 가능하도록 경고만 남기고 넘어간다.
+    // 실제 프로비저닝은 마스터 키를 쓰는 인덱싱 단계에서 수행된다.
+    try {
+      // 인덱스가 없으면 생성한다 (primaryKey = id).
+      try {
+        await this.client.getIndex(this.indexName);
+      } catch {
+        const task = await this.client.createIndex(this.indexName, { primaryKey: "id" });
+        await this.client.waitForTask(task.taskUid);
+      }
+
+      // 검색/필터 가능한 속성을 설정한다.
+      await this.idx.updateSettings({
+        searchableAttributes: ["title", "text"],
+        filterableAttributes: ["namespace"],
+        // 스니펫은 자체 makeSnippet으로 생성하므로 displayed는 전체 유지
+        displayedAttributes: ["id", "namespace", "title", "text", "text_raw", "contributors"],
+      });
+    } catch (err) {
+      console.error(
+        "[meilisearch] 인덱스 프로비저닝 건너뜀 (검색 전용 키이거나 권한 부족). " +
+          "검색은 계속 동작하며, 인덱스 생성/설정은 인덱싱 단계에서 수행됨: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
   }
 
   private ensureIndex(): Index {
