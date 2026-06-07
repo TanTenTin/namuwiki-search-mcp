@@ -1,35 +1,16 @@
 # AWS Lightsail 배포용 compose (tan-kim 서버에 함께 올라간다).
 #
-# 구성:
-#   - meilisearch : 검색 엔진. 내부 네트워크 + Vercel REST API가 Caddy 통해 접근.
-#   - api         : 내부 REST API. MCP 서버 전용(외부 노출 안 함).
-#   - mcp         : MCP HTTP 서버. Claude 클라이언트가 Caddy 통해 접근.
+# 검색 백엔드: AWS RDS(MySQL, InnoDB FULLTEXT + ngram).
+#   - api : 내부 REST API. RDS에 연결해 검색 수행. MCP 서버 전용(외부 노출 안 함).
+#   - mcp : MCP HTTP 서버. Claude 클라이언트가 Caddy(/namuwiki) 통해 접근.
 #
-# 외부 노출(TLS)은 기존 tan-kim Caddy를 재사용한다. (이 compose엔 Caddy 없음)
-# 포트는 모두 .env에서 주입한다 (기존 서버의 사용 중 포트와 충돌 방지).
+# 외부 노출(TLS)은 기존 tan-kim Caddy를 재사용한다 (이 compose엔 Caddy 없음).
+# RDS 자격증명 등은 infra/.env에서 주입한다 (rsync 제외 → 서버 수동 배치).
 #
-# ⚠️ 외부 노출 경로(Caddy 연동)는 docs/DEPLOY.md 참고.
-#
-# name: 프로젝트명을 명시 고정한다.
-#   compose 파일 경로가 tan-kim과 동일한 infra/docker-compose.yml 이라,
-#   명시하지 않으면 양쪽 프로젝트명이 둘 다 "infra"로 충돌한다.
-#   (그 경우 --remove-orphans가 상대 프로젝트 컨테이너를 고아로 보고 삭제함)
+# name: 프로젝트명을 명시 고정한다. compose 파일 경로가 tan-kim과 동일해
+#   명시하지 않으면 양쪽 프로젝트명이 "infra"로 충돌한다.
 name: namuwiki
 services:
-  meilisearch:
-    image: getmeili/meilisearch:v1.10
-    container_name: namu-meilisearch
-    restart: unless-stopped
-    environment:
-      MEILI_MASTER_KEY: ${MEILISEARCH_API_KEY}
-      MEILI_ENV: production
-    volumes:
-      - meili_data:/meili_data
-    networks:
-      - namu-internal
-      # Vercel REST API가 Caddy(/namuwiki-meili)를 통해 접근하므로 공유 네트워크 연결.
-      - caddy-shared
-
   api:
     build:
       context: ..
@@ -38,13 +19,13 @@ services:
     restart: unless-stopped
     command: ["npm", "run", "api"]
     environment:
-      SEARCH_ENGINE: meilisearch
-      MEILISEARCH_HOST: http://meilisearch:7700
-      MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY}
-      MEILISEARCH_INDEX: ${MEILISEARCH_INDEX:-namuwiki}
+      SEARCH_ENGINE: mysql
+      MYSQL_HOST: ${MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-namuwiki}
       API_PORT: "3000"
-    depends_on:
-      - meilisearch
     networks:
       - namu-internal
 
@@ -58,7 +39,7 @@ services:
     environment:
       MCP_TRANSPORT: http
       MCP_HTTP_PORT: "3001"
-      # MCP는 같은 네트워크의 내부 API를 직접 호출한다 (Vercel 왕복 없음).
+      # MCP는 같은 네트워크의 내부 API를 직접 호출한다.
       API_BASE_URL: http://api:3000
     depends_on:
       - api
@@ -69,12 +50,9 @@ services:
 
 networks:
   namu-internal:
-  # 중립 공유 네트워크 "edge". tan-kim Caddy와 namuwiki를 잇는 유일한 접점.
+  # 중립 공유 네트워크 "edge". tan-kim Caddy와 namuwiki(mcp)를 잇는 유일한 접점.
   # 어느 프로젝트도 소유하지 않는다(external) → compose down으로 삭제되지 않음.
   # 사전 생성 필요: `docker network create edge` (배포 스크립트가 멱등 생성).
   caddy-shared:
     external: true
     name: edge
-
-volumes:
-  meili_data:
