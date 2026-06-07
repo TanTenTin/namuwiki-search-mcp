@@ -18,6 +18,7 @@ import { runIndexing } from "../src/indexer/indexer.js";
 import { parseDump } from "../src/indexer/dump-parser.js";
 import { loadHuggingFace, loadHuggingFaceParquet } from "../src/indexer/hf-loader.js";
 import { MeilisearchEngine } from "../src/search/meilisearch.js";
+import { MysqlSearchEngine } from "../src/search/mysql.js";
 import type { NamuDocument } from "../src/types/index.js";
 
 /** 간단한 --key value / --flag 인자 파서 */
@@ -98,6 +99,16 @@ async function main(): Promise<void> {
   if (engine instanceof MeilisearchEngine) {
     console.error("[index] Meilisearch 인덱싱 태스크 완료 대기 중...");
     await engine.waitForIndexing();
+  }
+
+  // MySQL은 데이터 적재 후 FULLTEXT 인덱스를 한 번에 생성한다(I/O 효율).
+  if (engine instanceof MysqlSearchEngine) {
+    console.error("[index] MySQL FULLTEXT(ngram) 인덱스 생성 중... (오래 걸릴 수 있음)");
+    const ftStart = Date.now();
+    await engine.buildFulltextIndex();
+    console.error(
+      `[index] FULLTEXT 인덱스 생성 완료 (${((Date.now() - ftStart) / 1000).toFixed(1)}초)`,
+    );
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);

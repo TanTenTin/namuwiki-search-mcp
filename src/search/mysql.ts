@@ -58,9 +58,11 @@ export class MysqlSearchEngine implements SearchEngine {
       keepAliveInitialDelay: 10000,
     });
 
-    // 문서 테이블 + ngram FULLTEXT 인덱스 생성.
+    // 문서 테이블 생성. FULLTEXT 인덱스는 여기서 만들지 않는다.
+    // 대량 인덱싱 중 매 INSERT마다 ngram 인덱스를 갱신하면 I/O가 폭증해
+    // (특히 IOPS가 제한된 관리형 DB에서) stall이 발생하므로,
+    // 데이터 적재가 끝난 뒤 buildFulltextIndex()로 한 번에 생성한다.
     // - text는 본문(정제). 긴 문서를 위해 MEDIUMTEXT(최대 16MB).
-    // - FULLTEXT(title, text)에 ngram 파서를 지정해 한국어 부분 검색 지원.
     // - title은 정확 매칭 조회용으로 prefix 인덱스를 둔다.
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS documents (
@@ -71,10 +73,30 @@ export class MysqlSearchEngine implements SearchEngine {
         contributors MEDIUMTEXT   NOT NULL,
         PRIMARY KEY (id),
         KEY idx_title (title(255)),
-        KEY idx_namespace (namespace),
-        FULLTEXT KEY ft_text (title, text) WITH PARSER ngram
+        KEY idx_namespace (namespace)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+  }
+
+  /**
+   * ngram FULLTEXT 인덱스(ft_text)를 생성한다. 이미 있으면 아무것도 하지 않는다.
+   *
+   * 대량 적재가 끝난 뒤 한 번 호출한다. ALTER는 오래 걸릴 수 있으므로
+   * 타임아웃을 걸지 않고 완료까지 기다린다.
+   */
+  async buildFulltextIndex(): Promise<void> {
+    const pool = this.ensurePool();
+
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+       WHERE table_schema = ? AND table_name = 'documents' AND index_name = 'ft_text'`,
+      [this.conn.database],
+    );
+    if ((rows as Array<{ c: number }>)[0].c > 0) return; // 이미 존재
+
+    await pool.query(
+      `ALTER TABLE documents ADD FULLTEXT INDEX ft_text (title, text) WITH PARSER ngram`,
+    );
   }
 
   private ensurePool(): mysql.Pool {
@@ -124,8 +146,9 @@ export class MysqlSearchEngine implements SearchEngine {
     values: Array<string>,
     attempt = 1,
   ): Promise<void> {
-    const MAX_ATTEMPTS = 4;
-    const TIMEOUT_MS = 30000;
+    const MAX_ATTEMPTS = 5;
+    // 큰 문서가 몰린 배치는 INSERT가 오래 걸릴 수 있어 넉넉히 둔다.
+    const TIMEOUT_MS = 90000;
     try {
       await this.queryWithTimeout(sql, values, TIMEOUT_MS);
     } catch (err) {
