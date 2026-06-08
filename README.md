@@ -29,12 +29,14 @@
                         └──────────┘  └──────────────┘  └──────────┘
 ```
 
-- **SQLite FTS5**: 외부 서비스 불필요, 단일 파일 DB. 로컬 테스트 기본값(`SEARCH_ENGINE=sqlite`).
-- **Meilisearch**: 한국어 검색 품질·대용량에 유리. Docker로 기동.
-- **MySQL (InnoDB FULLTEXT + ngram)**: **운영 기본값**. AWS RDS에 두고 `namu-api`가 연결(`SEARCH_ENGINE=mysql`).
+- **SQLite FTS5**: 외부 서비스 불필요, 단일 파일 DB. 로컬 테스트 + **운영(서버) 검색 기본값**(`SEARCH_ENGINE=sqlite`).
+- **Meilisearch**: 한국어 검색 품질에 유리. Docker로 기동(선택).
+- **MySQL (InnoDB FULLTEXT + ngram)**: 검색 엔진 구현체로도 선택 가능(`SEARCH_ENGINE=mysql`). 단 **운영 검색 기본은 SQLite**다.
+
+> **운영 저장소 분리**: 검색 데이터(`documents`)는 **SQLite**(서버 볼륨, 덤프라 재색인 가능),
+> API 키(`api_keys`)·사용 로그(`usage_logs`)는 **MySQL**(영속). 자세히는 [docs/DEPLOY.md](docs/DEPLOY.md).
 
 MCP 트랜스포트는 로컬 연동 시 `stdio`, 원격 배포 시 `http`(Streamable HTTP)다.
-운영 배포(Lightsail + RDS + Caddy)는 [docs/DEPLOY.md](docs/DEPLOY.md)를 참조한다.
 
 ---
 
@@ -77,7 +79,7 @@ npm run mcp
 
 ## 인덱싱
 
-검색 엔진은 `.env`의 `SEARCH_ENGINE`(`sqlite` | `meilisearch`)에 따라 결정됩니다.
+검색 엔진은 `.env`의 `SEARCH_ENGINE`(`sqlite` | `meilisearch` | `mysql`)에 따라 결정됩니다. 운영(서버)은 `sqlite`입니다.
 
 ```powershell
 # 샘플 (로컬 테스트용)
@@ -145,10 +147,10 @@ npm run api
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `SEARCH_ENGINE` | `sqlite` | 검색 엔진 (`sqlite` \| `meilisearch` \| `mysql`). 운영은 `mysql` |
-| `SQLITE_DB_PATH` | `./data/namuwiki.db` | SQLite DB 경로 |
+| `SEARCH_ENGINE` | `sqlite` | 검색 엔진 (`sqlite` \| `meilisearch` \| `mysql`). **운영(서버)은 `sqlite`** |
+| `SQLITE_DB_PATH` | `./data/namuwiki.db` | SQLite DB 경로 (서버는 볼륨 `/data/namuwiki.db`) |
 | `MEILISEARCH_HOST` | `http://localhost:7700` | Meilisearch 호스트 |
-| `MYSQL_HOST` / `MYSQL_PORT` | `localhost` / `3306` | MySQL(RDS) 접속 호스트·포트 |
+| `MYSQL_HOST` / `MYSQL_PORT` | `localhost` / `3306` | MySQL(RDS) 접속 — **API 키·사용 로그용**(검색 아님) |
 | `MYSQL_USER` / `MYSQL_PASSWORD` | `root` / `` | MySQL 자격증명 |
 | `MYSQL_DATABASE` | `namuwiki` | MySQL 데이터베이스명 |
 | `API_PORT` | `3000` | REST API 포트 |

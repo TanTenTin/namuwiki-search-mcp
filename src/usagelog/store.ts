@@ -5,8 +5,9 @@
  * 검색 응답을 지연시키지 않도록 인메모리 버퍼에 모았다가 주기적으로 일괄 INSERT한다.
  * (로그 적재 실패는 검색 기능에 영향을 주지 않는다 — 조용히 버린다.)
  *
- * 검색 데이터(documents)는 SQLite(덤프)에 있지만, 사용 로그는 유실되면 안 되는
- * 운영 데이터이므로 영속성이 보장되는 MySQL에 둔다.
+ * 검색 데이터(documents)는 SQLite(덤프, 재색인 가능)에 두지만, 사용 로그는
+ * 영속 저장이 필요한 운영 데이터이므로 MySQL에 둔다.
+ * (단 적재는 베스트에포트 — 일시 장애 시 해당 배치 로그는 버려질 수 있다. 검색은 막지 않는다.)
  */
 
 import mysql from "mysql2/promise";
@@ -84,7 +85,8 @@ export class UsageLogStore {
     const values = batch.map((e) => [
       e.apiKeyId,
       e.endpoint,
-      e.query.slice(0, 512),
+      // 코드포인트 단위로 절단(서로게이트 페어 보존 → lone surrogate로 인한 INSERT 실패 방지).
+      [...e.query].slice(0, 512).join(""),
       e.resultCount,
     ]);
     try {

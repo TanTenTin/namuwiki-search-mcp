@@ -50,6 +50,8 @@ jobs:
       # 서버에서 재빌드 후 기동.
       #  - edge 네트워크 멱등 생성 (이미 있으면 통과). tan-kim과 공유하는 중립 망.
       #  - --remove-orphans는 name:namuwiki 프로젝트 범위로만 동작 (tan-kim 무영향).
+      #  ⚠️ up -d는 api 컨테이너를 재생성하므로, 서버에서 SQLite 색인(npm run index)이
+      #     진행 중일 때 이 워크플로가 돌면 색인이 중단된다. 색인 중에는 push/배포 금지.
       - name: Build and restart containers
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.AWS_USER }}@${{ secrets.AWS_HOST }}" \

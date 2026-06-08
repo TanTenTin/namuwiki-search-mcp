@@ -27,6 +27,36 @@ const DEFAULT_PARQUET_URL =
 const PARQUET_CHUNK = 10240;
 
 /**
+ * 일시 네트워크 장애(ETIMEDOUT 등)에 견디는 fetch.
+ *
+ * 원격 parquet은 HTTP Range 요청을 수없이 보내므로, 한 번의 일시 끊김으로
+ * 전체 인덱싱이 중단되지 않도록 지수 백오프로 재시도한다.
+ * hyparquet의 asyncBufferFromUrl에 주입해 모든 Range 요청에 적용한다.
+ */
+async function fetchWithRetry(
+  input: string | URL | Request,
+  init?: RequestInit,
+  retries = 6,
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(input, init);
+      // 5xx는 서버 일시 오류로 보고 재시도, 그 외(2xx/4xx)는 그대로 반환.
+      if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries - 1) {
+        // 1s, 2s, 4s, 8s, 16s ... 지수 백오프
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * parquet 한 행(원본)을 NamuDocument로 정규화한다.
  *
  * 이 데이터셋의 특이점:
@@ -68,7 +98,8 @@ export async function* loadHuggingFaceParquet(
 ): AsyncGenerator<NamuDocument> {
   const url = options.parquetUrl ?? DEFAULT_PARQUET_URL;
 
-  const file = await asyncBufferFromUrl({ url });
+  // 모든 Range 요청에 재시도 fetch를 적용해 일시 네트워크 끊김에 견딘다.
+  const file = await asyncBufferFromUrl({ url, fetch: fetchWithRetry as typeof fetch });
   const meta = await parquetMetadataAsync(file);
   const total = Number(meta.num_rows);
 
