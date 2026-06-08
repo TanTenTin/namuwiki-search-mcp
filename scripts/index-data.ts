@@ -45,6 +45,7 @@ async function main(): Promise<void> {
   const source = (args.source as string) ?? "sample";
   const batchSize = args.batch ? Number(args.batch) : undefined;
   const limit = args.limit ? Number(args.limit) : undefined;
+  const throttleMs = args.throttle ? Number(args.throttle) : undefined;
 
   const config = loadConfig();
   const engine = await createSearchEngine(config);
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
   const total = await runIndexing(engine, stream, {
     batchSize,
     limit,
+    throttleMs,
     onProgress: ({ indexed }) => {
       console.error(`[index] 진행: ${indexed}건 색인 완료`);
     },

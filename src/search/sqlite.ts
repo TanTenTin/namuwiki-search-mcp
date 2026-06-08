@@ -43,14 +43,14 @@ export class SqliteSearchEngine implements SearchEngine {
     this.db.pragma("journal_mode = WAL");
 
     // 본문/메타데이터 저장 테이블.
-    // FTS5 가상 테이블에는 검색 대상 텍스트만 넣고, 원문/기여자 등은 별도 테이블에 둔다.
+    // 정제본 데이터셋이라 원문(text_raw)을 따로 저장하지 않고 정제 텍스트(text)만 둔다.
+    // (text_raw와 text가 거의 동일해 중복이며, 디스크 용량을 크게 절감한다.)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS documents (
         id           TEXT PRIMARY KEY,
         namespace    TEXT NOT NULL,
         title        TEXT NOT NULL,
         text         TEXT NOT NULL,
-        text_raw     TEXT NOT NULL,
         contributors TEXT NOT NULL
       );
 
@@ -77,13 +77,12 @@ export class SqliteSearchEngine implements SearchEngine {
 
     // 본문 테이블 upsert + FTS 동기화를 트랜잭션으로 묶는다.
     const insertDoc = db.prepare(`
-      INSERT INTO documents (id, namespace, title, text, text_raw, contributors)
-      VALUES (@id, @namespace, @title, @text, @text_raw, @contributors)
+      INSERT INTO documents (id, namespace, title, text, contributors)
+      VALUES (@id, @namespace, @title, @text, @contributors)
       ON CONFLICT(id) DO UPDATE SET
         namespace=excluded.namespace,
         title=excluded.title,
         text=excluded.text,
-        text_raw=excluded.text_raw,
         contributors=excluded.contributors
     `);
 
@@ -102,7 +101,6 @@ export class SqliteSearchEngine implements SearchEngine {
           namespace: doc.namespace,
           title: doc.title,
           text: doc.text,
-          text_raw: doc.text_raw,
           contributors: JSON.stringify(doc.contributors),
         });
         const row = getRowid.get(doc.id) as { rowid: number } | undefined;
@@ -208,17 +206,17 @@ export class SqliteSearchEngine implements SearchEngine {
     }) as SearchRow[];
   }
 
-  async getArticle(title: string, plainText = true): Promise<ArticleResponse> {
+  async getArticle(title: string, _plainText = true): Promise<ArticleResponse> {
     const db = this.ensureDb();
 
     const stmt = db.prepare(`
-      SELECT title, text, text_raw, contributors
+      SELECT title, text, contributors
       FROM documents
       WHERE title = ?
       LIMIT 1
     `);
     const row = stmt.get(title) as
-      | { title: string; text: string; text_raw: string; contributors: string }
+      | { title: string; text: string; contributors: string }
       | undefined;
 
     if (!row) {
@@ -226,9 +224,10 @@ export class SqliteSearchEngine implements SearchEngine {
       return { title, text: "", contributors: [], found: false };
     }
 
+    // 정제본만 저장하므로 plain_text 여부와 무관하게 text를 반환한다.
     return {
       title: row.title,
-      text: plainText ? row.text : row.text_raw,
+      text: row.text,
       contributors: JSON.parse(row.contributors) as string[],
       found: true,
     };

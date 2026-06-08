@@ -7,6 +7,8 @@
 
 import "dotenv/config";
 import type { SearchEngine } from "./search/engine.js";
+import type { ApiKeyStore } from "./apikeys/store.js";
+import type { UsageLogStore } from "./usagelog/store.js";
 
 export interface AppConfig {
   searchEngine: "meilisearch" | "sqlite" | "mysql";
@@ -125,4 +127,24 @@ export async function createSearchEngine(config: AppConfig): Promise<SearchEngin
   }
   const { SqliteSearchEngine } = await import("./search/sqlite.js");
   return new SqliteSearchEngine(config.sqlite.dbPath);
+}
+
+/**
+ * API 키 저장소를 생성한다 (init은 호출하지 않음).
+ *
+ * 검색 데이터(documents)는 SQLite(덤프, 재색인 가능)에 두지만,
+ * API 키처럼 유실되면 안 되는 영속 데이터는 검색 엔진과 무관하게 항상 MySQL에 둔다.
+ */
+export async function createApiKeyStore(config: AppConfig): Promise<ApiKeyStore> {
+  const { MysqlApiKeyStore } = await import("./apikeys/mysql.js");
+  return new MysqlApiKeyStore(config.mysql, config.apiKeys.cacheTtlMs);
+}
+
+/**
+ * 사용 로그 저장소를 생성한다 (init은 호출하지 않음).
+ * 사용 로그도 영속 데이터이므로 MySQL에 둔다.
+ */
+export async function createUsageLogStore(config: AppConfig): Promise<UsageLogStore> {
+  const { UsageLogStore } = await import("./usagelog/store.js");
+  return new UsageLogStore(config.mysql);
 }

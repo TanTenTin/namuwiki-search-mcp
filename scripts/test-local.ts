@@ -104,7 +104,8 @@ async function main(): Promise<void> {
     const raw = (await fetch(
       `${BASE_URL}/article/${encodeURIComponent("나무위키")}?plain_text=false`,
     ).then((r) => r.json())) as ArticleResponse;
-    check("/article plain_text=false 원문 마크업 포함", raw.text.includes("'''"));
+    // text_raw를 저장하지 않으므로 plain_text=false도 정제본(마크업 제거)을 반환한다.
+    check("/article plain_text=false 정제본 반환", raw.text === article.text);
 
     // 2글자 쿼리: trigram FTS는 0건이지만 LIKE 폴백으로 매칭되어야 한다.
     const short = (await fetch(

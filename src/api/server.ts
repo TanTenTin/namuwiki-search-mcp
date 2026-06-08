@@ -14,17 +14,26 @@ import express, {
 } from "express";
 import { rateLimit, type RateLimitRequestHandler } from "express-rate-limit";
 import { pathToFileURL } from "node:url";
-import { loadConfig, createSearchEngine, type AppConfig } from "../config.js";
+import {
+  loadConfig,
+  createSearchEngine,
+  createApiKeyStore,
+  createUsageLogStore,
+  type AppConfig,
+} from "../config.js";
 import { createSearchRouter } from "./routes/search.js";
 import { createRouteCache } from "./cache.js";
 import type { SearchEngine } from "../search/engine.js";
 import type { ApiKeyStore, ApiKeyRecord } from "../apikeys/store.js";
+import type { UsageLogStore } from "../usagelog/store.js";
 
 export interface CreateAppOptions {
   /** 전체 설정 (부하 보호·키 인증 동작 결정). 생략 시 보호 미들웨어 없이 동작(테스트용). */
   config?: AppConfig;
   /** API 키 저장소. config.apiKeys.required일 때 필요. */
   apiKeyStore?: ApiKeyStore | null;
+  /** 사용 로그 저장소 (선택). 있으면 검색/문서 호출을 비동기로 기록한다. */
+  usageLog?: UsageLogStore | null;
 }
 
 /** 요청 헤더에서 Bearer 토큰 또는 X-API-Key 값을 추출한다. */
@@ -199,7 +208,7 @@ function createAdminRouter(store: ApiKeyStore, adminToken: string): Router {
  * @param opts   설정/키 저장소 (생략 시 보호·키 인증 없이 동작)
  */
 export function createApp(engine: SearchEngine, opts: CreateAppOptions = {}): express.Express {
-  const { config, apiKeyStore = null } = opts;
+  const { config, apiKeyStore = null, usageLog = null } = opts;
 
   // fail-closed 불변식: 키 필수인데 저장소가 없으면 무인증 개방을 막기 위해 기동을 거부한다.
   if (config?.apiKeys.required && !apiKeyStore) {
@@ -234,7 +243,7 @@ export function createApp(engine: SearchEngine, opts: CreateAppOptions = {}): ex
   const cache = config
     ? createRouteCache(config.protection.cacheMaxEntries, config.protection.cacheTtlMs)
     : undefined;
-  app.use("/", ...chain, createSearchRouter(engine, cache));
+  app.use("/", ...chain, createSearchRouter(engine, cache, usageLog ?? undefined));
 
   return app;
 }
@@ -247,11 +256,12 @@ export async function startServer(): Promise<void> {
   const engine = await createSearchEngine(config);
   await engine.init();
 
-  // 운영(키 필수)일 때만 RDS 기반 키 저장소를 준비한다.
+  // 운영(키 필수)일 때만 영속 저장소(MySQL)를 준비한다.
+  // 검색 데이터는 SQLite(덤프)지만, API 키·사용 로그는 영속성을 위해 MySQL에 둔다.
   let apiKeyStore: ApiKeyStore | null = null;
+  let usageLog: UsageLogStore | null = null;
   if (config.apiKeys.required) {
-    const { ApiKeyStore } = await import("../apikeys/store.js");
-    const store = new ApiKeyStore(config.mysql, config.apiKeys.cacheTtlMs);
+    const store = await createApiKeyStore(config);
     await store.init();
     apiKeyStore = store;
     if (!config.apiKeys.adminToken) {
@@ -259,9 +269,13 @@ export async function startServer(): Promise<void> {
         "[api] 경고: ADMIN_API_TOKEN 미설정 → 발급 엔드포인트(/admin/keys)가 비활성화됩니다.",
       );
     }
+    // 사용 로그도 MySQL에 적재한다.
+    const ul = await createUsageLogStore(config);
+    await ul.init();
+    usageLog = ul;
   }
 
-  const app = createApp(engine, { config, apiKeyStore });
+  const app = createApp(engine, { config, apiKeyStore, usageLog });
 
   app.listen(config.apiPort, () => {
     console.error(

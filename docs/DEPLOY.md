@@ -1,7 +1,9 @@
 # 배포 가이드
 
 REST API와 MCP 서버를 모두 **AWS Lightsail**(기존 tan-kim 서버)에서 Docker로 운영한다.
-검색 데이터는 **AWS RDS(MySQL)** 에 둔다. **Vercel은 사용하지 않는다.**
+**저장소 역할 분리**: 검색 데이터(`documents`)는 서버의 **SQLite**(덤프 — 언제든 재색인 가능)에 두고,
+API 키(`api_keys`)와 사용 로그(`usage_logs`)는 **MySQL**(영속 — 유실되면 안 되는 운영 데이터)에 둔다.
+**Vercel은 사용하지 않는다.**
 
 - REST API : `api.tan-kim.com/namuwiki` — **API 키 필수**(rate-limit은 키별)
 - MCP 서버 : `mcp.tan-kim.com/namuwiki` — 클라이언트가 설정한 **API 키를 그대로 전달**해 인증
@@ -38,16 +40,19 @@ nano ~/namuwiki-search-mcp/infra/.env   # infra/.env.example 참고
 `infra/.env` (compose가 읽음):
 
 ```env
-# RDS
+# MySQL (api_keys + usage_logs용). 검색은 SQLite라 검색용 DB는 필요 없다.
 MYSQL_HOST=your-namuwiki.xxxx.ap-northeast-2.rds.amazonaws.com
 MYSQL_PORT=3306
 MYSQL_USER=admin
-MYSQL_PASSWORD=<RDS 비밀번호>
+MYSQL_PASSWORD=<MySQL 비밀번호>
 MYSQL_DATABASE=namuwiki
 # API 키
 REQUIRE_API_KEY=true
 ADMIN_API_TOKEN=<강력한 랜덤 관리자 토큰>   # /admin/keys 보호 (사용자 키 발급/폐기용)
 ```
+
+> 검색용 SQLite 파일은 compose가 named volume(`namu-data`)을 `/data`에 마운트하고
+> `SQLITE_DB_PATH=/data/namuwiki.db`로 고정하므로 `.env`에 따로 지정할 필요가 없다.
 
 ### 1-2. 기동 + 인덱싱
 
@@ -57,11 +62,13 @@ docker network create edge 2>/dev/null || true
 docker compose -f infra/docker-compose.yml build
 docker compose -f infra/docker-compose.yml up -d --remove-orphans
 
-# RDS 인덱싱 (데이터 적재 후 FULLTEXT 인덱스까지 자동 생성)
+# SQLite 인덱싱 — 서버의 /data 볼륨에 직접 색인한다(HF parquet 스트리밍).
+# 56만 건 전체. 로컬→서버 전송 없이 컨테이너 안에서 색인한다.
 docker compose -f infra/docker-compose.yml exec api npm run index -- --source huggingface
 ```
 
-> 검색이 `Can't find FULLTEXT index ...` 503을 내면 아직 인덱싱(특히 마지막 `buildFulltextIndex` 단계)이 끝나지 않은 것이다. 인덱싱 완료 후 정상화된다.
+> SQLite FTS5는 INSERT 시 점진적으로 색인되므로 별도 FULLTEXT 빌드(ALTER) 단계가 없다.
+> 색인이 끝나면 바로 검색이 가능하다. 2글자 검색은 trigram이 못 잡으면 LIKE 폴백으로 처리된다.
 
 ### 1-3. API 키 발급
 

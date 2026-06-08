@@ -13,16 +13,28 @@
 import { Router, type Request, type Response } from "express";
 import type { SearchEngine } from "../../search/engine.js";
 import type { RouteCache } from "../cache.js";
+import type { UsageLogStore } from "../../usagelog/store.js";
+import type { ApiKeyRecord } from "../../apikeys/store.js";
 
 /** 캐시 키 구분자. 검색어/네임스페이스에 등장하지 않는 제어문자(US, 0x1F). */
 const SEP = String.fromCharCode(31);
 
+/** res.locals에 실린 검증된 API 키의 id를 꺼낸다(비키 모드면 null). */
+function apiKeyId(res: Response): number | null {
+  return (res.locals as { apiKey?: ApiKeyRecord }).apiKey?.id ?? null;
+}
+
 /**
  * 검색 라우터를 생성한다.
- * @param engine 초기화된 검색 엔진 (의존성 주입)
- * @param cache  선택적 응답 캐시 (생략 시 캐싱하지 않음)
+ * @param engine   초기화된 검색 엔진 (의존성 주입)
+ * @param cache    선택적 응답 캐시 (생략 시 캐싱하지 않음)
+ * @param usageLog 선택적 사용 로그 저장소 (생략 시 로깅하지 않음)
  */
-export function createSearchRouter(engine: SearchEngine, cache?: RouteCache): Router {
+export function createSearchRouter(
+  engine: SearchEngine,
+  cache?: RouteCache,
+  usageLog?: UsageLogStore,
+): Router {
   const router = Router();
 
   // GET /search?q=...&limit=...&namespace=...
@@ -45,6 +57,7 @@ export function createSearchRouter(engine: SearchEngine, cache?: RouteCache): Ro
     const cacheKey = `${q}${SEP}${limit ?? ""}${SEP}${namespace ?? ""}`;
     const hit = cache?.search.get(cacheKey);
     if (hit) {
+      usageLog?.log({ apiKeyId: apiKeyId(res), endpoint: "search", query: q, resultCount: hit.results.length });
       if (!res.headersSent) res.json(hit);
       return;
     }
@@ -52,6 +65,7 @@ export function createSearchRouter(engine: SearchEngine, cache?: RouteCache): Ro
     try {
       const result = await engine.search(q, { limit, namespace });
       cache?.search.set(cacheKey, result);
+      usageLog?.log({ apiKeyId: apiKeyId(res), endpoint: "search", query: q, resultCount: result.results.length });
       // 타임아웃 미들웨어가 이미 응답했을 수 있으므로 늦은 쓰기를 건너뛴다.
       if (!res.headersSent) res.json(result);
     } catch (err) {
@@ -74,6 +88,7 @@ export function createSearchRouter(engine: SearchEngine, cache?: RouteCache): Ro
     const cacheKey = `${title}${SEP}${plainText}`;
     const hit = cache?.article.get(cacheKey);
     if (hit) {
+      usageLog?.log({ apiKeyId: apiKeyId(res), endpoint: "article", query: title, resultCount: hit.found ? 1 : 0 });
       if (!res.headersSent) res.json(hit);
       return;
     }
@@ -82,6 +97,7 @@ export function createSearchRouter(engine: SearchEngine, cache?: RouteCache): Ro
       const result = await engine.getArticle(title, plainText);
       // 미발견(found:false)도 안정적이므로 캐시한다.
       cache?.article.set(cacheKey, result);
+      usageLog?.log({ apiKeyId: apiKeyId(res), endpoint: "article", query: title, resultCount: result.found ? 1 : 0 });
       if (!res.headersSent) res.json(result);
     } catch (err) {
       if (!res.headersSent) {
