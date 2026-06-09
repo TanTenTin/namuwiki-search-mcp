@@ -42,6 +42,15 @@ export interface AppConfig {
     adminToken: string;
     /** 키 검증 결과 인메모리 캐시 TTL(ms) */
     cacheTtlMs: number;
+    /** 공개 셀프 발급(POST /keys) 설정 */
+    selfIssue: {
+      /** 셀프 발급 허용 여부 */
+      enabled: boolean;
+      /** 셀프 발급 키의 기본 분당 요청 한도 */
+      ratePerMin: number;
+      /** IP당 시간당 발급 가능 횟수(남용 방지) */
+      maxPerHourPerIp: number;
+    };
   };
   /** 응답 캐시 및 부하 보호 설정 */
   protection: {
@@ -95,6 +104,11 @@ export function loadConfig(): AppConfig {
           : searchEngine === "mysql",
       adminToken: process.env.ADMIN_API_TOKEN ?? "",
       cacheTtlMs: Number(process.env.API_KEY_CACHE_TTL_MS ?? 60_000),
+      selfIssue: {
+        enabled: (process.env.SELF_ISSUE ?? "true") === "true",
+        ratePerMin: Number(process.env.SELF_ISSUE_RATE_PER_MIN ?? 30),
+        maxPerHourPerIp: Number(process.env.SELF_ISSUE_MAX_PER_HOUR ?? 3),
+      },
     },
     protection: {
       cacheMaxEntries: Number(process.env.CACHE_MAX_ENTRIES ?? 5000),

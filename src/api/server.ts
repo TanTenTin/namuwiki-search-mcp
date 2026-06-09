@@ -151,6 +151,54 @@ function createRateLimiter(keyMode: boolean, defaultPerMin: number): RateLimitRe
   });
 }
 
+/** 프록시(Caddy) 뒤에서 클라이언트 IP를 뽑는다(XFF 첫 항목 우선). */
+function clientIp(req: Request): string {
+  const xff = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(xff) ? (xff[0] ?? "") : (xff ?? "");
+  return raw.split(",")[0]?.trim() || req.ip || "unknown";
+}
+
+/**
+ * 공개 셀프 발급 라우터. 인증 없이 누구나 키를 발급받는다(공개 API).
+ *   POST /keys  { name? } → 원본 키 1회 반환
+ * 남용 방지: IP당 시간당 발급 횟수를 제한하고, 발급 키의 기본 한도를 낮게 둔다.
+ * (고한도 키는 관리자 발급(/admin/keys)으로만 가능)
+ */
+function createSelfIssueRouter(
+  store: ApiKeyStore,
+  ratePerMin: number,
+  maxPerHourPerIp: number,
+): Router {
+  const router = Router();
+
+  const issueLimiter = rateLimit({
+    windowMs: 60 * 60_000, // 1시간
+    limit: maxPerHourPerIp,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    validate: false,
+    keyGenerator: (req: Request): string => clientIp(req),
+    message: { error: "발급 한도를 초과했습니다. 잠시 후 다시 시도해주세요." },
+  });
+
+  router.post("/keys", issueLimiter, async (req: Request, res: Response): Promise<void> => {
+    const body = (req.body ?? {}) as { name?: unknown };
+    const name =
+      typeof body.name === "string" && body.name.trim() ? body.name.trim() : "self-issued";
+    // 셀프 발급은 한도를 사용자가 정할 수 없다(서버 기본값 고정).
+    const { id, rawKey } = await store.issue(name, ratePerMin);
+    res.status(201).json({
+      id,
+      name,
+      rate_per_min: ratePerMin,
+      api_key: rawKey,
+      note: "api_key는 지금만 표시됩니다. 안전한 곳에 보관하세요(서버는 해시만 저장).",
+    });
+  });
+
+  return router;
+}
+
 /**
  * 관리자 발급/폐기 라우터. ADMIN_API_TOKEN으로 보호한다.
  *   POST   /admin/keys        { name, rate_per_min? } → 원본 키 1회 반환
@@ -228,6 +276,17 @@ export function createApp(engine: SearchEngine, opts: CreateAppOptions = {}): ex
   // 발급/폐기 엔드포인트 (관리자 토큰 보호). 키 저장소 + 관리자 토큰 있을 때만.
   if (apiKeyStore && config?.apiKeys.adminToken) {
     app.use("/admin", createAdminRouter(apiKeyStore, config.apiKeys.adminToken));
+  }
+
+  // 공개 셀프 발급(POST /keys). 인증 체인 "앞"에 마운트해 키 없이 접근 가능하게 한다.
+  if (keyMode && apiKeyStore && config?.apiKeys.selfIssue.enabled) {
+    app.use(
+      createSelfIssueRouter(
+        apiKeyStore,
+        config.apiKeys.selfIssue.ratePerMin,
+        config.apiKeys.selfIssue.maxPerHourPerIp,
+      ),
+    );
   }
 
   // 검색/문서 라우트 체인: 키 인증 → rate-limit → 동시성 → 타임아웃 → 라우트.
