@@ -1,16 +1,17 @@
-# AWS Lightsail 배포용 compose (tan-kim 서버에 함께 올라간다).
+# Oracle Cloud 배포용 compose (tan-kim 서버에 함께 올라간다).
 #
 # 저장소 역할 분리:
 #   - SQLite (named volume namu-data) : 검색 데이터(documents). 덤프라 재색인 가능.
-#   - MySQL  (기존 RDS/관리형 DB)      : API 키(api_keys) + 사용 로그(usage_logs).
-#                                        유실되면 안 되는 영속 데이터.
+#   - MySQL  (AWS RDS, cross-cloud 유지) : API 키(api_keys) + 사용 로그(usage_logs).
+#                                        유실되면 안 되는 영속 데이터. Oracle→RDS 인터넷 연결이므로
+#                                        RDS 보안그룹에 Oracle 공인 IP의 3306 인바운드를 허용해야 한다.
 #   인덱싱은 서버에서 1회 실행한다(아래 DEPLOY.md 참고).
 #
 #   - api : REST API. SQLite 검색 + MySQL 인증/로그를 수행.
-#           caddy-config의 Caddy가 api.tan-kim.com/namuwiki 로 공개 노출한다.
+#           호스트 nginx가 api.tan-kim.com/namuwiki 로 공개 노출한다.
 #   - mcp : MCP HTTP 서버. Claude 클라이언트가 mcp.tan-kim.com/namuwiki(Bearer)로 접근.
 #
-# 외부 노출(TLS)은 별도 caddy-config 레포의 Caddy가 담당한다.
+# 외부 노출(TLS)은 호스트의 nginx(+Cloudflare Origin Cert)가 담당한다.
 # 시크릿(MYSQL_PASSWORD, ADMIN_API_TOKEN 등)은 infra/.env에서 주입한다.
 name: namuwiki
 services:
@@ -45,9 +46,10 @@ services:
     volumes:
       # SQLite DB 영속화. 인덱싱 결과(수십 GB)가 여기 쌓인다.
       - namu-data:/data
+    ports:
+      - "127.0.0.1:3000:3000" # 호스트 nginx만 접근 (외부 직접 노출 금지)
     networks:
       - namu-internal
-      - caddy-shared
 
   mcp:
     build:
@@ -61,11 +63,13 @@ services:
       MCP_HTTP_PORT: "3001"
       # MCP는 같은 네트워크의 내부 API를 직접 호출한다(공개 경로를 거치지 않음).
       API_BASE_URL: http://api:3000
+    ports:
+      # 컨테이너 3001 → 호스트 127.0.0.1:3011 (rag-embed의 호스트 3001과 충돌 회피)
+      - "127.0.0.1:3011:3001"
     depends_on:
       - api
     networks:
       - namu-internal
-      - caddy-shared
 
 volumes:
   # SQLite DB 영속 볼륨. 디스크가 부족하면 블록스토리지를 이 볼륨 경로에
@@ -74,6 +78,3 @@ volumes:
 
 networks:
   namu-internal:
-  caddy-shared:
-    external: true
-    name: edge
