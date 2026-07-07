@@ -1,6 +1,6 @@
-name: deploy-aws
+name: deploy-oracle
 
-# MCP + 검색엔진을 AWS Lightsail(기존 tan-kim 서버)에 배포.
+# MCP + 검색엔진을 Oracle Cloud(tan-kim 서버)에 배포.
 # main 브랜치에서 서버 관련 코드가 바뀌면 rsync로 서버에 복사 후 docker compose 재빌드.
 on:
   push:
@@ -12,7 +12,7 @@ on:
       - "Dockerfile"
       - "package.json"
       - "package-lock.json"
-      - ".github/workflows/deploy-aws.yml"
+      - ".github/workflows/deploy-oracle.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -30,9 +30,9 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.AWS_SSH_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.ORACLE_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.AWS_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.ORACLE_HOST }}" >> ~/.ssh/known_hosts
 
       # 서버의 ~/namuwiki-search-mcp 로 소스 동기화.
       # .env, node_modules, data 는 제외 (서버에 수동 배치/볼륨 유지).
@@ -45,17 +45,15 @@ jobs:
             --exclude='.env' \
             --exclude='dist' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./ "${{ secrets.AWS_USER }}@${{ secrets.AWS_HOST }}:~/namuwiki-search-mcp/"
+            ./ "${{ secrets.ORACLE_USER }}@${{ secrets.ORACLE_HOST }}:~/namuwiki-search-mcp/"
 
       # 서버에서 재빌드 후 기동.
-      #  - edge 네트워크 멱등 생성 (이미 있으면 통과). tan-kim과 공유하는 중립 망.
       #  - --remove-orphans는 name:namuwiki 프로젝트 범위로만 동작 (tan-kim 무영향).
       #  ⚠️ up -d는 api 컨테이너를 재생성하므로, 서버에서 SQLite 색인(npm run index)이
       #     진행 중일 때 이 워크플로가 돌면 색인이 중단된다. 색인 중에는 push/배포 금지.
       - name: Build and restart containers
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.AWS_USER }}@${{ secrets.AWS_HOST }}" \
+          ssh -i ~/.ssh/deploy_key "${{ secrets.ORACLE_USER }}@${{ secrets.ORACLE_HOST }}" \
             'cd ~/namuwiki-search-mcp && \
-             docker network create edge 2>/dev/null || true && \
              docker compose -f infra/docker-compose.yml build && \
              docker compose -f infra/docker-compose.yml up -d --remove-orphans'
