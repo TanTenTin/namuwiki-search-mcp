@@ -61,6 +61,13 @@ export interface ArticleResponse {
   text: string;
   contributors: string[];
   found: boolean;
+  /**
+   * 결과 출처(선택). 크롤 폴백이 켜져 있을 때만 채워진다.
+   *   - "dump": 덤프/인덱스에서 찾음
+   *   - "crawled": 인덱스에 없어 나무위키에서 실시간 크롤로 가져옴
+   * 폴백 미사용 경로와의 호환을 위해 선택 필드로 둔다.
+   */
+  source?: "dump" | "crawled";
 }
 
 /**

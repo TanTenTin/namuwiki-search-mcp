@@ -108,8 +108,11 @@ curl "https://api.tan-kim.com/namuwiki/article/리눅스?plain_text=false" \
 응답 (문서가 없으면 **404가 아니라** `found: false`):
 
 ```json
-{ "title": "리눅스", "text": "...", "contributors": ["..."], "found": true }
+{ "title": "리눅스", "text": "...", "contributors": ["..."], "found": true, "source": "dump" }
 ```
+
+> `source` 필드는 **크롤 폴백**(`CRAWL_FALLBACK=true`)이 켜져 있을 때만 채워집니다.
+> `"dump"`는 인덱스에서 찾은 결과, `"crawled"`는 인덱스에 없어 나무위키에서 실시간으로 가져온 결과입니다. 자세한 동작은 [3-6. 크롤 폴백](#3-6-크롤-폴백-인덱스에-없는-문서-보완)을 보세요.
 
 ### 1-4. 다른 언어에서 호출하기
 
@@ -285,6 +288,45 @@ curl -X POST http://localhost:3000/admin/keys \
 
 자세한 키 정책은 [docs/API-KEYS.md](docs/API-KEYS.md)를 참고하세요.
 
+### 3-6. 크롤 폴백 (인덱스에 없는 문서 보완)
+
+덤프는 특정 시점의 스냅샷이라 이후 생성된 문서나 색인되지 않은 문서는 `found: false`가 됩니다.
+**크롤 폴백**을 켜면, 인덱스에 없는 문서를 요청받았을 때 나무위키에서 실시간으로 가져와 반환하고 **인덱스에 upsert**해 다음 조회부터는 즉시 응답합니다. `GET /article/:title`에만 적용됩니다(검색 `/search`에는 미적용).
+
+```env
+CRAWL_FALLBACK=true                        # 폴백 켜기 (기본 false)
+NAMU_CRAWL_URL=https://namu.wiki/w/{title} # {title}이 URL 인코딩된 제목으로 치환
+CRAWL_TIMEOUT_MS=5000                       # 요청 타임아웃
+CRAWL_RETRIES=2                             # 실패 시 재시도 횟수
+```
+
+동작:
+
+```
+GET /article/제목
+  └─ 인덱스에 있음     → 반환 (source: "dump")
+  └─ 인덱스에 없음
+       └─ 크롤 성공    → 인덱스 upsert 후 반환 (source: "crawled")
+       └─ 크롤 실패/미발견/차단 → 기존 found: false 유지
+```
+
+> ⚠️ **기본은 "인덱스에만" 추가합니다.** 인덱스는 재생성 가능한 검색 캐시 성격이라 안전하지만,
+> 크롤 결과를 **영속 파일에 누적**하면 나무위키 데이터베이스의 "상당한 부분"을 스크래핑해 재구축하는 셈이 되어 **데이터베이스제작자의 권리** 리스크가 생깁니다.
+> 그래서 파일 누적은 명시적 opt-in(`CRAWL_APPEND_DUMP=true`)일 때만 동작하며, 기본값은 꺼져 있습니다.
+> robots.txt는 `/w/`(문서 페이지) 크롤을 허용하고, 콘텐츠는 CC BY-SA 2.0 KR로 출처표시 하에 재배포 가능합니다.
+
+```env
+# (opt-in) 크롤 결과를 JSONL 사이드카에 누적 — 기본 false
+CRAWL_APPEND_DUMP=true
+CRAWL_DUMP_PATH=./data/crawled.jsonl
+```
+
+누적한 사이드카는 재인덱싱으로 영구 반영할 수 있습니다(id 기준 upsert라 중복 안전):
+
+```powershell
+npm run index -- --source crawled --file ./data/crawled.jsonl
+```
+
 ---
 
 ## 아키텍처
@@ -338,8 +380,11 @@ MCP 트랜스포트는 로컬 연동 시 `stdio`, 원격 배포 시 `http`(Strea
 | `MCP_HTTP_PORT` | `3001` | `http` 트랜스포트 포트 |
 | `REQUIRE_API_KEY` | (mysql이면 `true`) | 외부 요청에 API 키 강제 여부 |
 | `ADMIN_API_TOKEN` | `` | `/admin/keys`(키 발급/폐기) 보호 토큰 |
+| `CRAWL_FALLBACK` | `false` | 인덱스에 없는 문서를 실시간 크롤로 보완 (문서 조회 한정) |
+| `NAMU_CRAWL_URL` | `https://namu.wiki/w/{title}` | 크롤 대상 URL 템플릿 (`{title}` 치환) |
+| `CRAWL_APPEND_DUMP` | `false` | 크롤 결과를 JSONL 사이드카에 누적 (법적 리스크로 기본 off) |
 
-부하 보호 관련(`CACHE_*`, `MAX_CONCURRENT`, `REQUEST_TIMEOUT_MS`, `SELF_ISSUE*`)은 `.env.example` 참고.
+부하 보호 관련(`CACHE_*`, `MAX_CONCURRENT`, `REQUEST_TIMEOUT_MS`, `SELF_ISSUE*`), 크롤 세부(`CRAWL_TIMEOUT_MS`, `CRAWL_RETRIES`, `CRAWL_DUMP_PATH`)는 `.env.example` 참고.
 
 ---
 
@@ -353,12 +398,17 @@ src/
 │   ├── engine.ts           # SearchEngine 인터페이스
 │   ├── sqlite.ts           # SQLite FTS5 구현체 — 운영 기본
 │   ├── meilisearch.ts      # Meilisearch 구현체
-│   └── mysql.ts            # MySQL(RDS, FULLTEXT) 구현체
+│   ├── mysql.ts            # MySQL(RDS, FULLTEXT) 구현체
+│   └── fallback.ts         # 크롤 폴백 데코레이터 (미발견 시 실시간 크롤)
+├── crawler/
+│   ├── namu.ts             # 나무위키 단건 크롤러 (fetch + 재시도)
+│   └── dump-append.ts      # 크롤 결과 JSONL 사이드카 append (opt-in)
 ├── apikeys/                # API 키 저장소(MySQL) + 검증/캐시
 ├── usagelog/               # 사용 로그 저장소(MySQL)
 ├── indexer/
 │   ├── markup.ts           # 나무위키 마크업 정제 + 스니펫
 │   ├── dump-parser.ts      # 덤프 JSON 스트리밍 파서
+│   ├── jsonl-parser.ts     # JSONL(크롤 사이드카) 파서
 │   ├── hf-loader.ts        # HuggingFace 로더
 │   └── indexer.ts          # 배치 인덱싱 오케스트레이터
 ├── api/

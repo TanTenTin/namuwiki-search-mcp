@@ -52,6 +52,25 @@ export interface AppConfig {
       maxPerHourPerIp: number;
     };
   };
+  /** 크롤 폴백 설정 (인덱스에 없는 문서를 실시간 크롤로 보완) */
+  crawl: {
+    /** 폴백 활성화 여부(기본 false) */
+    enabled: boolean;
+    /** 요청 URL 템플릿. `{title}`가 URL 인코딩된 제목으로 치환된다. */
+    urlTemplate: string;
+    /** 요청 타임아웃(ms) */
+    timeoutMs: number;
+    /** 실패 시 재시도 횟수 */
+    retries: number;
+    /**
+     * 크롤 결과를 영속 덤프 사이드카(JSONL)에도 append할지 여부(기본 false).
+     * 데이터베이스제작자의 권리 리스크 때문에 기본은 인덱스 전용이며,
+     * 명시적으로 켤 때만 파일에 누적한다.
+     */
+    appendDump: boolean;
+    /** 덤프 사이드카 파일 경로 */
+    dumpPath: string;
+  };
   /** 응답 캐시 및 부하 보호 설정 */
   protection: {
     /** 응답 캐시 최대 항목 수 */
@@ -110,6 +129,14 @@ export function loadConfig(): AppConfig {
         maxPerHourPerIp: Number(process.env.SELF_ISSUE_MAX_PER_HOUR ?? 3),
       },
     },
+    crawl: {
+      enabled: (process.env.CRAWL_FALLBACK ?? "false") === "true",
+      urlTemplate: process.env.NAMU_CRAWL_URL ?? "https://namu.wiki/w/{title}",
+      timeoutMs: Number(process.env.CRAWL_TIMEOUT_MS ?? 5000),
+      retries: Number(process.env.CRAWL_RETRIES ?? 2),
+      appendDump: (process.env.CRAWL_APPEND_DUMP ?? "false") === "true",
+      dumpPath: process.env.CRAWL_DUMP_PATH ?? "./data/crawled.jsonl",
+    },
     protection: {
       cacheMaxEntries: Number(process.env.CACHE_MAX_ENTRIES ?? 5000),
       cacheTtlMs: Number(process.env.CACHE_TTL_MS ?? 300_000),
@@ -141,6 +168,34 @@ export async function createSearchEngine(config: AppConfig): Promise<SearchEngin
   }
   const { SqliteSearchEngine } = await import("./search/sqlite.js");
   return new SqliteSearchEngine(config.sqlite.dbPath);
+}
+
+/**
+ * 크롤 폴백이 켜져 있으면 엔진을 CrawlFallbackEngine으로 감싼다.
+ *
+ * createSearchEngine과 분리한 이유: 인덱싱 스크립트(index-data.ts)는
+ * `engine instanceof MeilisearchEngine` 같은 구체 타입 검사를 하므로,
+ * 그 경로에서는 래핑하지 않고 REST 서버 기동 경로에서만 감싼다.
+ */
+export async function maybeWrapCrawlFallback(
+  engine: SearchEngine,
+  config: AppConfig,
+): Promise<SearchEngine> {
+  if (!config.crawl.enabled) return engine;
+
+  const { CrawlFallbackEngine } = await import("./search/fallback.js");
+  const appender = config.crawl.appendDump
+    ? new (await import("./crawler/dump-append.js")).CrawledDumpAppender(config.crawl.dumpPath)
+    : undefined;
+
+  return new CrawlFallbackEngine(engine, {
+    crawler: {
+      urlTemplate: config.crawl.urlTemplate,
+      timeoutMs: config.crawl.timeoutMs,
+      retries: config.crawl.retries,
+    },
+    appender,
+  });
 }
 
 /**

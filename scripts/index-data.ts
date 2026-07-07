@@ -16,6 +16,7 @@
 import { loadConfig, createSearchEngine } from "../src/config.js";
 import { runIndexing } from "../src/indexer/indexer.js";
 import { parseDump } from "../src/indexer/dump-parser.js";
+import { parseJsonl } from "../src/indexer/jsonl-parser.js";
 import { loadHuggingFace, loadHuggingFaceParquet } from "../src/indexer/hf-loader.js";
 import { MeilisearchEngine } from "../src/search/meilisearch.js";
 import { MysqlSearchEngine } from "../src/search/mysql.js";
@@ -67,6 +68,10 @@ async function main(): Promise<void> {
       if (!args.file) throw new Error("--source dump 사용 시 --file <경로>가 필요합니다.");
       stream = parseDump(args.file as string);
       break;
+    case "crawled":
+      // 크롤 폴백이 누적한 사이드카(JSONL) 재인덱싱. id 기준 upsert라 중복 안전.
+      stream = parseJsonl((args.file as string) ?? "./data/crawled.jsonl");
+      break;
     case "huggingface":
       // 기본은 parquet 직접 스트리밍(HTTP Range, 대량 인덱싱 권장).
       // --method rows 를 주면 datasets-server rows API를 사용한다(소량/간편).
@@ -84,7 +89,7 @@ async function main(): Promise<void> {
       }
       break;
     default:
-      throw new Error(`알 수 없는 소스: ${source} (sample | dump | huggingface)`);
+      throw new Error(`알 수 없는 소스: ${source} (sample | dump | huggingface | crawled)`);
   }
 
   const start = Date.now();

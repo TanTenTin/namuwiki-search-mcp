@@ -197,6 +197,12 @@ MCP_HTTP_PORT=3001
 - 문서 미발견 시 `found: false` 반환 (404 에러 대신).
 - MCP 툴에서 에러 발생 시 `isError: true`로 MCP 규격에 맞게 반환.
 
+### 크롤 폴백 (`CRAWL_FALLBACK`)
+- `getArticle` 미발견 시에만 나무위키를 실시간 크롤(`/w/{title}`)해 보완한다. 검색(`/search`)에는 적용하지 않는다.
+- `CrawlFallbackEngine`은 `SearchEngine`을 감싸는 데코레이터로 구현한다 (라우트/기존 엔진 코드 무수정 원칙 유지). 래핑은 REST 서버 기동 경로에서만 하고, 인덱싱 스크립트의 구체 타입(`instanceof`) 검사를 깨지 않게 `createSearchEngine`과 분리한다.
+- **크롤 결과는 인덱스에만 upsert하는 것이 기본이다.** 영속 파일 누적은 데이터베이스제작자의 권리("상당한 부분" 복제) 리스크가 있어 `CRAWL_APPEND_DUMP=true` opt-in일 때만 JSONL 사이드카에 기록한다.
+- 크롤 실패/차단/미발견 시 예외를 던지지 말고 기존 `found: false` 응답을 그대로 유지한다(best-effort).
+
 ---
 
 ## 실행 방법 (예정)

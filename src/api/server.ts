@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import {
   loadConfig,
   createSearchEngine,
+  maybeWrapCrawlFallback,
   createApiKeyStore,
   createUsageLogStore,
   type AppConfig,
@@ -312,7 +313,8 @@ export function createApp(engine: SearchEngine, opts: CreateAppOptions = {}): ex
  */
 export async function startServer(): Promise<void> {
   const config = loadConfig();
-  const engine = await createSearchEngine(config);
+  // 크롤 폴백이 켜져 있으면 엔진을 래핑한다(REST 서버 경로에서만).
+  const engine = await maybeWrapCrawlFallback(await createSearchEngine(config), config);
   await engine.init();
 
   // 운영(키 필수)일 때만 영속 저장소(MySQL)를 준비한다.
@@ -339,7 +341,8 @@ export async function startServer(): Promise<void> {
   app.listen(config.apiPort, () => {
     console.error(
       `[api] REST API 서버 실행 중: http://localhost:${config.apiPort} ` +
-        `(엔진: ${config.searchEngine}, API키: ${config.apiKeys.required ? "필수" : "비활성"})`,
+        `(엔진: ${config.searchEngine}, API키: ${config.apiKeys.required ? "필수" : "비활성"}, ` +
+        `크롤폴백: ${config.crawl.enabled ? (config.crawl.appendDump ? "on+덤프" : "on(인덱스전용)") : "off"})`,
     );
   });
 }
