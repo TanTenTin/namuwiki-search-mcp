@@ -65,11 +65,70 @@ export function stripMarkup(raw: string): string {
   // 9) HTML 태그 잔여물 제거
   text = text.replace(/<[^>]+>/g, "");
 
+  // 9.5) 표/스타일/엔티티 등 놓치기 쉬운 잔재 추가 정제
+  text = cleanupResidue(text);
+
   // 10) 공백 정규화: 연속 공백/개행 축소
   text = text.replace(/[ \t]+/g, " ");
   text = text.replace(/\n{3,}/g, "\n\n");
 
   return text.trim();
+}
+
+/**
+ * stripMarkup이 놓치기 쉬운 잔재를 추가로 제거한다(베스트 에포트 정제).
+ *
+ * 실제 색인된 정제 텍스트에서도 아래 잔재가 스니펫에 노출되어 가독성을 해쳤다:
+ *   - #!wiki / #!folding 등 인라인 디렉티브와 style="..." 속성
+ *   - align= / width= / bgcolor= 등 표·스타일 속성 파편(공백 또는 & 로 구분)
+ *   - {{{#색}}}의 이중 색상 지정 잔재 (예: "000,#e5e5e5", "#cc3d3d,#c13333")
+ *   - 대괄호가 벗겨진 인라인 파일 링크 잔재 (예: "파일:아이콘.svg|width=15")
+ *   - &nbsp; 등 HTML 엔티티
+ *
+ * stripMarkup 내부(향후 재색인 시 반영)와 makeSnippet 앞(기존 색인 즉시 개선)에서
+ * 모두 호출한다. 이미 깨끗한 텍스트에는 대부분 무효과이며 멱등적으로 동작한다.
+ */
+export function cleanupResidue(text: string): string {
+  if (!text) return "";
+  let t = text;
+
+  // 1) #!wiki, #!folding, #!html, #!syntax 등 디렉티브 토큰 제거
+  t = t.replace(/#!\w+/g, " ");
+
+  // 2) style="..." / style='...' 속성 제거
+  t = t.replace(/\bstyle\s*=\s*("[^"]*"|'[^']*')/gi, " ");
+
+  // 3) 대괄호가 벗겨진 인라인 파일/이미지 링크 잔재 제거: "파일:...확장자|옵션"
+  //    옵션(|width=15 등)은 공백을 넘어 뒤 문장까지 삼키지 않도록 공백 전까지만 매칭한다.
+  //    (속성 제거보다 먼저 처리해야 파일 토큰의 |옵션이 통째로 제거된다.)
+  t = t.replace(
+    /(?:파일|그림|file):[^|\]\n]*?\.(?:svg|png|jpe?g|gif|webp)(?:\|[^\s\]\n]+)*/gi,
+    " ",
+  );
+
+  // 4) 표/스타일 속성 파편 제거: align=..., width=..., bgcolor=... 등 (선행 & 도 함께 제거)
+  //    문자열 맨 앞에 오는 경우도 잡도록 \b 경계를 쓰고, 값은 공백/&/|/따옴표 전까지만 매칭한다.
+  t = t.replace(
+    /&?\b(?:align|width|height|bgcolor|color|rowspan|colspan|valign)\s*=\s*[^\s&|"']+/gi,
+    " ",
+  );
+
+  // 5) 이중 색상 지정 잔재 제거: "#rrggbb,#rrggbb" 또는 "rrggbb,#rrggbb"
+  t = t.replace(/#?[0-9a-fA-F]{3,8}\s*,\s*#[0-9a-fA-F]{3,8}/g, " ");
+  // 단독 6자리 헥스 색상 잔재
+  t = t.replace(/#[0-9a-fA-F]{6}\b/g, " ");
+
+  // 6) HTML 엔티티: 공백류(nbsp 등)는 공백으로, 그 외 명명/숫자 엔티티는 제거
+  t = t.replace(/&(?:nbsp|ensp|emsp|thinsp);/gi, " ");
+  t = t.replace(/&#?\w+;/g, "");
+
+  // 7) 공백 사이에 홀로 남은 표 구분 파이프(|) 정리
+  t = t.replace(/(^|\s)\|(?=\s|$)/g, "$1");
+
+  // 8) 공백 정리
+  t = t.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n").trim();
+
+  return t;
 }
 
 /**
@@ -85,7 +144,9 @@ export function stripMarkup(raw: string): string {
 export function makeSnippet(text: string, query: string, maxLength = 300): string {
   if (!text) return "";
 
-  const normalized = text.replace(/\s+/g, " ").trim();
+  // 이미 색인된 정제 텍스트에 남은 마크업/스타일 잔재를 스니펫 생성 전에 한 번 더 정제한다.
+  // (재색인 없이도 스니펫 가독성이 즉시 개선된다.)
+  const normalized = cleanupResidue(text).replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) return normalized;
 
   // 검색어 첫 토큰의 위치를 찾는다 (대소문자 무시)

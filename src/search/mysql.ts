@@ -20,6 +20,8 @@ import type {
   SearchOptions,
 } from "../types/index.js";
 import { makeSnippet } from "../indexer/markup.js";
+import { rerankHits, poolSizeFor } from "./rerank.js";
+import { canonicalOf } from "./synonyms.js";
 
 export interface MysqlConnectionConfig {
   host: string;
@@ -180,29 +182,63 @@ export class MysqlSearchEngine implements SearchEngine {
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {
     const pool = this.ensurePool();
     const limit = normalizeLimit(options?.limit);
+    // 재정렬로 대표 문서를 끌어올리려면 후보를 넉넉히 조회해 풀에 담아야 한다.
+    const poolSize = poolSizeFor(limit);
 
     // NATURAL LANGUAGE MODE: 사용자 입력의 특수문자를 연산자로 해석하지 않아 안전하다.
     // 같은 MATCH 식을 SELECT와 WHERE에 두 번 써도 옵티마이저가 한 번만 평가한다.
     const namespaceClause = options?.namespace ? "AND namespace = ?" : "";
 
-    const params: Array<string | number> = [query, query];
-    if (options?.namespace) params.push(options.namespace);
-    params.push(limit);
+    const poolParams: Array<string | number> = [query, query];
+    if (options?.namespace) poolParams.push(options.namespace);
+    poolParams.push(poolSize);
 
-    const [rows] = await pool.query(
-      `SELECT
-         title,
-         text,
-         MATCH(title, text) AGAINST(? IN NATURAL LANGUAGE MODE) AS score
-       FROM documents
-       WHERE MATCH(title, text) AGAINST(? IN NATURAL LANGUAGE MODE)
-       ${namespaceClause}
-       ORDER BY score DESC
-       LIMIT ?`,
-      params,
-    );
+    // 검색어가 알려진 별칭이면 정식 문서 제목도 함께 완전일치 조회 대상에 넣는다.
+    // (예: "BTS" → "방탄소년단". 요구사항 [2] 큐레이션 동의어)
+    const canonical = canonicalOf(query);
+    const exactTitles = canonical ? [query, canonical] : [query];
 
-    const results = (rows as SearchRow[]).map((r) => ({
+    // 전문검색 후보 풀 조회와, 제목 완전일치 문서 조회를 동시에 수행한다.
+    // 제목 완전일치 문서는 본문 키워드 빈도가 낮아 풀에서 누락될 수 있으므로,
+    // title 인덱스로 직접 찾아 반드시 후보에 포함시킨다 (요구사항 [1][2] 보장).
+    const exactParams: Array<string> = [...exactTitles];
+    if (options?.namespace) exactParams.push(options.namespace);
+    const exactPlaceholders = exactTitles.map(() => "?").join(", ");
+
+    const [poolResult, exactResult] = await Promise.all([
+      pool.query(
+        `SELECT
+           title,
+           text,
+           MATCH(title, text) AGAINST(? IN NATURAL LANGUAGE MODE) AS score
+         FROM documents
+         WHERE MATCH(title, text) AGAINST(? IN NATURAL LANGUAGE MODE)
+         ${namespaceClause}
+         ORDER BY score DESC
+         LIMIT ?`,
+        poolParams,
+      ),
+      pool.query(
+        `SELECT title, text, 0 AS score FROM documents
+         WHERE title IN (${exactPlaceholders}) ${options?.namespace ? "AND namespace = ?" : ""}
+         LIMIT 5`,
+        exactParams,
+      ),
+    ]);
+
+    const rows = poolResult[0] as SearchRow[];
+    const exactRows = exactResult[0] as SearchRow[];
+
+    // 제목 완전일치 문서(별칭의 정식 제목 포함)가 풀에 없으면 앞에 주입한다.
+    // 표시 점수는 풀 최고 점수로 맞춰 상위 노출과 자연스러운 스코어를 유지한다
+    // (재정렬이 티어0으로 끌어올림).
+    const topScore = rows.length > 0 ? Number(rows[0].score) : 1;
+    const injected = exactRows.filter((e) => !rows.some((r) => r.title === e.title));
+    for (const e of injected) e.score = topScore;
+    const candidates = injected.length > 0 ? [...injected, ...rows] : rows;
+
+    const ranked = rerankHits(candidates, query, limit, canonical);
+    const results = ranked.map((r) => ({
       title: r.title,
       snippet: makeSnippet(r.text, query, 300),
       score: Number(r.score),

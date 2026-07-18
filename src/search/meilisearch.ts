@@ -15,6 +15,8 @@ import type {
   SearchOptions,
 } from "../types/index.js";
 import { makeSnippet } from "../indexer/markup.js";
+import { rerankHits, poolSizeFor } from "./rerank.js";
+import { canonicalOf } from "./synonyms.js";
 
 export class MeilisearchEngine implements SearchEngine {
   private client: MeiliSearch;
@@ -78,19 +80,55 @@ export class MeilisearchEngine implements SearchEngine {
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {
     const index = this.ensureIndex();
     const limit = normalizeLimit(options?.limit);
+    // 재정렬로 대표 문서를 끌어올리려면 후보를 넉넉히 조회해 풀에 담아야 한다.
+    const poolSize = poolSizeFor(limit);
 
-    const result = await index.search(query, {
-      limit,
-      filter: options?.namespace ? [`namespace = "${options.namespace}"`] : undefined,
-      attributesToRetrieve: ["title", "text"],
-      showRankingScore: true,
-    });
+    // 검색어가 알려진 별칭이면 정식 제목 용어로 보조 검색을 하나 더 돌려
+    // 정식 문서를 후보에 합친다. (title 필터가 없어 직접 주입이 어렵기 때문.
+    // 예: "BTS" → "방탄소년단". 요구사항 [2] 큐레이션 동의어)
+    const canonical = canonicalOf(query);
+    const filter = options?.namespace ? [`namespace = "${options.namespace}"`] : undefined;
 
-    const results = result.hits.map((hit) => ({
+    const [result, canonResult] = await Promise.all([
+      index.search(query, {
+        limit: poolSize,
+        filter,
+        attributesToRetrieve: ["title", "text"],
+        showRankingScore: true,
+      }),
+      canonical
+        ? index.search(canonical, {
+            limit: 10,
+            filter,
+            attributesToRetrieve: ["title", "text"],
+            showRankingScore: true,
+          })
+        : Promise.resolve(null),
+    ]);
+
+    // 후보를 중간 형태로 정규화하고, 별칭 보조 검색 결과를 제목 기준으로 합친다.
+    // (title 완전일치 부스팅[1][2] + 하위 문서 페널티[4])
+    const toCandidate = (hit: Record<string, unknown>): { title: string; text: string; score: number } => ({
       title: hit.title as string,
-      snippet: makeSnippet((hit.text as string) ?? "", query, 300),
+      text: (hit.text as string) ?? "",
       // Meilisearch의 _rankingScore는 0~1. 높을수록 관련도 높음.
       score: (hit as { _rankingScore?: number })._rankingScore ?? 0,
+    });
+
+    const candidates = result.hits.map(toCandidate);
+    if (canonResult) {
+      const seen = new Set(candidates.map((c) => c.title));
+      for (const hit of canonResult.hits) {
+        const c = toCandidate(hit as Record<string, unknown>);
+        if (!seen.has(c.title)) candidates.push(c);
+      }
+    }
+
+    const ranked = rerankHits(candidates, query, limit, canonical);
+    const results = ranked.map((c) => ({
+      title: c.title,
+      snippet: makeSnippet(c.text, query, 300),
+      score: c.score,
     }));
 
     return {

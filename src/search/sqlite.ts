@@ -22,6 +22,8 @@ import type {
   SearchOptions,
 } from "../types/index.js";
 import { makeSnippet } from "../indexer/markup.js";
+import { rerankHits, poolSizeFor } from "./rerank.js";
+import { canonicalOf } from "./synonyms.js";
 
 /** search/likeSearch가 공통으로 반환하는 내부 행 형태 */
 interface SearchRow {
@@ -117,6 +119,8 @@ export class SqliteSearchEngine implements SearchEngine {
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {
     const db = this.ensureDb();
     const limit = normalizeLimit(options?.limit);
+    // 재정렬로 대표 문서를 끌어올리려면 후보를 넉넉히 조회해 풀에 담아야 한다.
+    const poolSize = poolSizeFor(limit);
 
     // FTS5 MATCH 쿼리. 사용자 입력을 안전하게 처리하기 위해 큰따옴표로 감싸
     // 특수문자(연산자)로 해석되지 않도록 한다. trigram이므로 부분 매칭이 된다.
@@ -144,7 +148,7 @@ export class SqliteSearchEngine implements SearchEngine {
     try {
       rows = stmt.all({
         q: ftsQuery,
-        limit,
+        limit: poolSize,
         ...(options?.namespace ? { namespace: options.namespace } : {}),
       }) as SearchRow[];
     } catch {
@@ -155,16 +159,46 @@ export class SqliteSearchEngine implements SearchEngine {
     // FTS5 trigram 토크나이저는 3글자 미만 쿼리에서 토큰을 만들지 못해
     // 매칭이 0건이 된다. 이 경우 LIKE 부분 일치로 폴백한다.
     if (rows.length === 0) {
-      rows = this.likeSearch(query, limit, options?.namespace);
+      rows = this.likeSearch(query, poolSize, options?.namespace);
     }
 
-    const results = rows.map((r) => ({
+    // 검색어가 알려진 별칭이면 정식 문서 제목도 완전일치 조회 대상에 넣는다.
+    // (예: "BTS" → "방탄소년단". 요구사항 [2] 큐레이션 동의어)
+    const canonical = canonicalOf(query);
+    const exactTitles = canonical ? [query, canonical] : [query];
+
+    // 제목 완전일치 문서를 직접 조회해 후보에 반드시 포함시킨다 (요구사항 [1][2] 보장).
+    // 본문 키워드 빈도가 낮아 FTS 풀에서 누락될 수 있기 때문이다.
+    const exactRows = this.findExactTitles(exactTitles, options?.namespace);
+    const topScore = rows.length > 0 ? rows[0].score : 1;
+    const injected = exactRows.filter((e) => !rows.some((r) => r.title === e.title));
+    for (const e of injected) e.score = topScore; // 재정렬이 티어0으로 끌어올림
+    const candidates = injected.length > 0 ? [...injected, ...rows] : rows;
+
+    const ranked = rerankHits(candidates, query, limit, canonical);
+    const results = ranked.map((r) => ({
       title: r.title,
       snippet: makeSnippet(r.text, query, 300),
       score: r.score,
     }));
 
     return { results, total: results.length };
+  }
+
+  /** 주어진 제목들과 완전일치하는 문서를 조회한다. (별칭 정식 제목 포함) */
+  private findExactTitles(titles: string[], namespace?: string): SearchRow[] {
+    if (titles.length === 0) return [];
+    const db = this.ensureDb();
+    const placeholders = titles.map(() => "?").join(", ");
+    const namespaceClause = namespace ? `AND namespace = ?` : "";
+    const stmt = db.prepare(`
+      SELECT title, text, 0 AS score
+      FROM documents
+      WHERE title IN (${placeholders}) ${namespaceClause}
+      LIMIT 5
+    `);
+    const params: string[] = namespace ? [...titles, namespace] : [...titles];
+    return stmt.all(...params) as SearchRow[];
   }
 
   /**
